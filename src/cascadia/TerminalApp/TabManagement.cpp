@@ -203,8 +203,9 @@ namespace winrt::TerminalApp::implementation
     {
         if (pane)
         {
-            auto newTabImpl = winrt::make_self<Tab>(pane);
+            auto newTabImpl = winrt::make_self<Tab>(pane, _tmuxWorkspaceEnabled);
             _InitializeTab(newTabImpl, insertPosition);
+            _TmuxRestoreTab(*newTabImpl);
             return *newTabImpl;
         }
         return nullptr;
@@ -426,7 +427,7 @@ namespace winrt::TerminalApp::implementation
 
     // Removes the tab (both TerminalControl and XAML).
     // NOTE: Don't call this directly, but rather `tab.Close()`.
-    void TerminalPage::_RemoveTab(const winrt::TerminalApp::Tab& tab)
+    void TerminalPage::_RemoveTab(winrt::TerminalApp::Tab tab)
     {
         uint32_t tabIndex{};
         if (!_tabs.IndexOf(tab, tabIndex))
@@ -465,6 +466,7 @@ namespace winrt::TerminalApp::implementation
         _tabs.RemoveAt(tabIndex);
         _tabView.TabItems().RemoveAt(tabIndex);
         _UpdateTabIndices();
+        _TmuxTabRemoved(tab);
 
         // To close the window here, we need to close the hosting window.
         if (_tabs.Size() == 0)
@@ -473,7 +475,18 @@ namespace winrt::TerminalApp::implementation
             // if the user manually closed all tabs.
             // Do this only if we are the last window; the monarch will notice
             // we are missing and remove us that way otherwise.
-            CloseWindowRequested.raise(*this, nullptr);
+            if (!_tmuxWorkspaceEnabled)
+            {
+                CloseWindowRequested.raise(*this, nullptr);
+            }
+            else
+            {
+                _tabContent.Children().Clear();
+                _tabView.SelectedItem(nullptr);
+                TmuxEmptyWorkspace().Visibility(Visibility::Visible);
+                TmuxWorkspaceView().IsPaneOpen(true);
+                TmuxSessionList().Focus(FocusState::Programmatic);
+            }
         }
         else if (focusedTabIndex.has_value() && focusedTabIndex.value() == gsl::narrow_cast<uint32_t>(tabIndex))
         {
@@ -482,9 +495,9 @@ namespace winrt::TerminalApp::implementation
             // 2. In fullscreen (GH#5799) and focus (GH#7916) modes the _OnTabItemsChanged is not fired
             // 3. When rearranging tabs (GH#7916) _OnTabItemsChanged is suppressed
 
-            const auto newSelectedTab = _mruTabs.GetAt(0);
-            _UpdatedSelectedTab(newSelectedTab);
+            const auto newSelectedTab = _mruTabs.Size() ? _mruTabs.GetAt(0) : _tabs.GetAt(std::min(tabIndex, _tabs.Size() - 1));
             _tabView.SelectedItem(newSelectedTab.TabViewItem());
+            _UpdatedSelectedTab(newSelectedTab);
         }
 
         // GH#5559 - If we were in the middle of a drag/drop, end it by clearing
@@ -501,6 +514,10 @@ namespace winrt::TerminalApp::implementation
     // - Sets focus to the tab to the right or left the currently selected tab.
     void TerminalPage::_SelectNextTab(const bool bMoveRight, const Windows::Foundation::IReference<Microsoft::Terminal::Settings::Model::TabSwitcherMode>& customTabSwitcherMode)
     {
+        if (_tabs.Size() == 0)
+        {
+            return;
+        }
         const auto index{ _GetFocusedTabIndex().value_or(0) };
         const auto tabSwitchMode = customTabSwitcherMode ? customTabSwitcherMode.Value() : _settings.GlobalSettings().TabSwitcherMode();
         if (tabSwitchMode == TabSwitcherMode::Disabled)
@@ -538,6 +555,10 @@ namespace winrt::TerminalApp::implementation
     // true iff we were able to select that tab index, false otherwise
     bool TerminalPage::_SelectTab(uint32_t tabIndex)
     {
+        if (_tabs.Size() == 0)
+        {
+            return false;
+        }
         // GH#9369 - if the argument is out of range, then clamp to the number
         // of available tabs. Previously, we'd just silently do nothing if the
         // value was greater than the number of tabs.
@@ -587,7 +608,7 @@ namespace winrt::TerminalApp::implementation
         // GH#1117: This is a workaround because _tabView.SelectedIndex()
         //          sometimes return incorrect result after removing some tabs
         uint32_t focusedIndex;
-        if (_tabView.TabItems().IndexOf(_tabView.SelectedItem(), focusedIndex))
+        if (_tabView.TabItems().IndexOf(_tabView.SelectedItem(), focusedIndex) && focusedIndex < _tabs.Size())
         {
             return focusedIndex;
         }
@@ -941,6 +962,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab)
     {
+        TmuxEmptyWorkspace().Visibility(Visibility::Collapsed);
         // Unfocus all the tabs.
         for (const auto& tab : _tabs)
         {
@@ -963,7 +985,7 @@ namespace winrt::TerminalApp::implementation
             // get tossed back to the focused terminal control, so we don't
             // need to worry about focus getting lost.
             const auto p = CommandPaletteElement();
-            if (!p || p.Visibility() != Visibility::Visible)
+            if ((!p || p.Visibility() != Visibility::Visible) && !_tmuxDialogOpen)
             {
                 tab.Focus(FocusState::Programmatic);
                 _UpdateMRUTab(tab);
@@ -985,6 +1007,7 @@ namespace winrt::TerminalApp::implementation
             }
 
             _adjustProcessPriorityThrottled->Run();
+            _TmuxSyncSelection();
         }
         CATCH_LOG();
     }
@@ -1140,10 +1163,12 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_FocusCurrentTab(const bool focusAlways)
     {
+        if (_tmuxDialogOpen) { return; }
         // We don't want to set focus on the tab if fly-out is open as it will
         // be closed TODO GH#5400: consider checking we are not in the opening
         // state, by hooking both Opening and Open events
-        if (focusAlways || !_newTabButton.Flyout().IsOpen())
+        const auto flyout = _newTabButton ? _newTabButton.Flyout() : nullptr;
+        if (focusAlways || !flyout || !flyout.IsOpen())
         {
             // Return focus to the active control
             if (auto tab{ _GetFocusedTab() })

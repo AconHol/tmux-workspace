@@ -15,6 +15,10 @@
 
     <Grid x:Name="Root"
           Background="Transparent">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -23,9 +27,10 @@
 
         <local:TabRowControl x:Name="TabRow"
                              Grid.Row="0"
+                             Grid.ColumnSpan="2"
                              KeyUp="_KeyDownHandler" />
 
-        <StackPanel Grid.Row="1"
+        <StackPanel Grid.Row="1" Grid.ColumnSpan="2"
                     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
             <mux:InfoBar x:Name="CloseOnExitInfoBar"
                          x:Uid="CloseOnExitInfoBar"
@@ -40,16 +45,285 @@
                             Click="_CloseOnExitInfoDismissHandler" />
                 </mux:InfoBar.ActionButton>
             </mux:InfoBar>
+            <mux:InfoBar x:Name="TmuxProblem" IsOpen="False" IsClosable="False" Severity="Warning">
+                <mux:InfoBar.ActionButton>
+                    <Button x:Name="TmuxProblemAction" Click="_TmuxProblemActionClicked" Content="打开 SSH 终端" />
+                </mux:InfoBar.ActionButton>
+            </mux:InfoBar>
         </StackPanel>
 
-        <Grid x:Name="TabContent"
-              Grid.Row="2"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch">
-            <Grid.Background>
-                <ImageBrush />
-            </Grid.Background>
+        <SplitView x:Name="TmuxWorkspaceView" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"
+                   DisplayMode="CompactInline" IsPaneOpen="True" OpenPaneLength="280" CompactPaneLength="48"
+                   PanePlacement="Left" PaneBackground="Transparent" Background="Transparent">
+            <SplitView.Pane>
+                <Border x:Name="TmuxSidebar" Width="280"
+                        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,1,0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                        <Button x:Name="TmuxSidebarToggle" Width="40" Height="40" Margin="4"
+                                      HorizontalAlignment="Left" Click="_TmuxToggleSidebarClicked"
+                                      Style="{ThemeResource TmuxSubtleButtonStyle}"
+                                      AutomationProperties.Name="折叠会话侧栏" ToolTipService.ToolTip="折叠会话侧栏">
+                            <FontIcon Glyph="&#xE700;" FontSize="16" />
+                        </Button>
+                    <Grid x:Name="TmuxSidebarBody" Grid.Row="1" Margin="16,8,16,16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="服务器" Style="{ThemeResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="TmuxServerHeading" Style="{ThemeResource SubtitleTextBlockStyle}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Button Grid.Column="1" VerticalAlignment="Center" Style="{ThemeResource TmuxSubtleButtonStyle}"
+                                    AutomationProperties.Name="服务器选项" ToolTipService.ToolTip="服务器选项">
+                                <FontIcon Glyph="&#xE712;" FontSize="16" />
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Text="打开 SSH 终端" Click="_TmuxVerifySshClicked">
+                                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE756;" /></MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                        <MenuFlyoutItem Text="切换服务器" Click="_TmuxSwitchServerClicked">
+                                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8AB;" /></MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="TmuxNewButton" HorizontalAlignment="Stretch"
+                                    Style="{ThemeResource AccentButtonStyle}" Click="_TmuxNewSessionClicked">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                    <TextBlock Text="新建会话" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="TmuxRefreshButton" Grid.Column="1" Margin="8,0,0,0"
+                                    AutomationProperties.Name="刷新会话" ToolTipService.ToolTip="刷新会话"
+                                    Click="_TmuxRefreshClicked">
+                                <FontIcon Glyph="&#xE72C;" FontSize="16" />
+                            </Button>
+                        </Grid>
+                        <TextBox x:Name="TmuxSessionSearch" Grid.Row="2" PlaceholderText="搜索会话"
+                                 AutomationProperties.Name="搜索会话" TextChanged="_TmuxSearchChanged" Margin="0,0,0,8" />
+                        <ListView x:Name="TmuxSessionList" Grid.Row="3" SelectionMode="Single" IsItemClickEnabled="True"
+                                  ItemClick="_TmuxSessionClicked" HorizontalContentAlignment="Stretch"
+                                  AutomationProperties.Name="远端 tmux 会话" />
+                        <StackPanel Grid.Row="4" Spacing="8" Margin="0,12,0,0">
+                            <ProgressBar x:Name="TmuxLoading" IsIndeterminate="True" Visibility="Collapsed" />
+                            <TextBlock x:Name="TmuxStatus" TextWrapping="Wrap" Style="{ThemeResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" AutomationProperties.LiveSetting="Polite" />
+                            <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Style="{ThemeResource TmuxSubtleButtonStyle}"
+                                    Click="_TmuxPersonalizationClicked">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <FontIcon Glyph="&#xE713;" FontSize="16" />
+                                    <TextBlock Text="个性化" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                        <Grid x:Name="TmuxSidebarRail" Grid.Row="1" Width="48" HorizontalAlignment="Left" Visibility="Collapsed">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <Button Width="40" Height="40" Margin="4" Click="_TmuxNewSessionClicked"
+                                        Style="{ThemeResource TmuxSubtleButtonStyle}" AutomationProperties.Name="新建会话"
+                                        ToolTipService.ToolTip="新建会话"><FontIcon Glyph="&#xE710;" FontSize="16" /></Button>
+                                <Button Width="40" Height="40" Margin="4" Click="_TmuxRefreshClicked"
+                                        Style="{ThemeResource TmuxSubtleButtonStyle}" AutomationProperties.Name="刷新会话"
+                                        ToolTipService.ToolTip="刷新会话"><FontIcon Glyph="&#xE72C;" FontSize="16" /></Button>
+                            </StackPanel>
+                            <Button Grid.Row="2" Width="40" Height="40" Margin="4,4,4,12" Click="_TmuxPersonalizationClicked"
+                                    Style="{ThemeResource TmuxSubtleButtonStyle}" AutomationProperties.Name="个性化"
+                                    ToolTipService.ToolTip="个性化"><FontIcon Glyph="&#xE713;" FontSize="16" /></Button>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </SplitView.Pane>
+            <SplitView.Content>
+                <Grid>
+                    <Grid x:Name="TabContent"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch">
+                        <Grid.Background>
+                            <ImageBrush />
+                        </Grid.Background>
+                    </Grid>
+
+                    <Grid x:Name="TmuxEmptyWorkspace"
+                          Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="400" Margin="32" Spacing="12">
+                            <FontIcon Glyph="&#xE8A5;" FontSize="32" HorizontalAlignment="Center" />
+                            <TextBlock Text="选择会话" Style="{ThemeResource SubtitleTextBlockStyle}" HorizontalAlignment="Center" />
+                            <TextBlock Text="从侧边栏打开会话，或创建一个新会话。"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </SplitView.Content>
+        </SplitView>
+
+        <Grid x:Name="TmuxServerPicker" Grid.Row="1" Grid.RowSpan="2" Grid.ColumnSpan="2"
+              Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+            <Grid MaxWidth="800" Margin="32" HorizontalAlignment="Stretch">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="服务器" Style="{ThemeResource TitleTextBlockStyle}" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Style="{ThemeResource AccentButtonStyle}" Click="_TmuxAddServerClicked">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE710;" FontSize="12" />
+                            <TextBlock Text="添加服务器" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+                <TextBlock Grid.Row="1" Text="选择服务器以连接并管理会话。" Margin="0,0,0,24"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                <Grid Grid.Row="2">
+                    <ListView x:Name="TmuxServerList" SelectionMode="None" IsItemClickEnabled="True"
+                              ItemClick="_TmuxServerClicked" HorizontalContentAlignment="Stretch"
+                              AutomationProperties.Name="已保存和本机 SSH 配置中的服务器">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="CornerRadius" Value="8" />
+                                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                                <Setter Property="BorderThickness" Value="1" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                    </ListView>
+                    <StackPanel x:Name="TmuxNoServers" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="360">
+                        <FontIcon Glyph="&#xE968;" FontSize="40" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="添加第一台服务器" Style="{ThemeResource SubtitleTextBlockStyle}" HorizontalAlignment="Center" />
+                        <TextBlock Text="粘贴 SSH 指令即可添加。本机 SSH 配置中的服务器会自动显示在这里。"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+                <Grid Grid.Row="3" Margin="0,20,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="TmuxHomeStatus" VerticalAlignment="Center" TextWrapping="Wrap"
+                               Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Button Grid.Column="1" Click="_TmuxPersonalizationClicked" Style="{ThemeResource TmuxSubtleButtonStyle}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE713;" FontSize="16" />
+                            <TextBlock Text="个性化" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Grid>
         </Grid>
+
+        <ContentDialog x:Name="TmuxAddServerDialog" Grid.Row="2" Grid.ColumnSpan="2"
+                       Title="添加服务器" PrimaryButtonText="添加并连接" CloseButtonText="取消"
+                       DefaultButton="Primary" IsPrimaryButtonEnabled="False">
+            <ScrollViewer MaxHeight="440" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel MinWidth="300" MaxWidth="460" Spacing="16">
+                    <StackPanel Spacing="8">
+                        <TextBox x:Name="TmuxSshCommand" Header="SSH 指令或主机" PlaceholderText="ssh user@host -p 22"
+                                 MaxLength="4096" TextChanged="_TmuxSshCommandChanged" />
+                        <TextBlock Text="自动使用此电脑的 SSH 配置和可用密钥。" Style="{ThemeResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Border x:Name="TmuxConnectionPreview" Padding="16" CornerRadius="8"
+                            BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="连接信息" FontWeight="SemiBold" />
+                            <TextBlock x:Name="TmuxCommandSummary" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="TmuxServerError" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                               TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <mux:Expander Header="更多选项" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                        <StackPanel Spacing="16">
+                            <TextBox x:Name="TmuxServerLabel" Header="名称（可选）" PlaceholderText="例如：开发服务器"
+                                     MaxLength="80" TextChanged="_TmuxDetailsChanged" />
+                            <TextBox x:Name="TmuxHost" Header="主机或 SSH 别名" MaxLength="253" TextChanged="_TmuxDetailsChanged" />
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="120" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="TmuxUser" Header="用户名" PlaceholderText="使用 SSH 配置"
+                                         Margin="0,0,12,0" MaxLength="128" TextChanged="_TmuxDetailsChanged" />
+                                <TextBox x:Name="TmuxPort" Grid.Column="1" Header="端口" PlaceholderText="自动"
+                                         MaxLength="5" TextChanged="_TmuxDetailsChanged" />
+                            </Grid>
+                            <TextBox x:Name="TmuxIdentity" Header="私钥文件（可选）" PlaceholderText="使用默认密钥或 ssh-agent"
+                                     TextChanged="_TmuxDetailsChanged" />
+                            <TextBox x:Name="TmuxJumpHost" Header="跳板机（可选）" PlaceholderText="SSH 别名或 user@host:port"
+                                     TextChanged="_TmuxDetailsChanged" />
+                            <TextBox x:Name="TmuxConfigFile" Header="SSH 配置文件（可选）" PlaceholderText="使用此电脑的默认配置"
+                                     TextChanged="_TmuxDetailsChanged" />
+                        </StackPanel>
+                    </mux:Expander>
+                </StackPanel>
+            </ScrollViewer>
+        </ContentDialog>
+
+        <ContentDialog x:Name="TmuxPersonalizationDialog" Grid.Row="2" Grid.ColumnSpan="2"
+                       Title="个性化" PrimaryButtonText="保存" CloseButtonText="取消" DefaultButton="Primary">
+            <ScrollViewer MaxHeight="440" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel MinWidth="300" MaxWidth="460" Spacing="16">
+                    <ComboBox x:Name="TmuxTheme" Header="应用主题" HorizontalAlignment="Stretch" />
+                    <ComboBox x:Name="TmuxColorScheme" Header="终端配色" HorizontalAlignment="Stretch" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="120" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="TmuxFontFace" Header="终端字体" Margin="0,0,12,0" PlaceholderText="Cascadia Mono" />
+                        <mux:NumberBox x:Name="TmuxFontSize" Grid.Column="1" Header="字号" Minimum="8" Maximum="40"
+                                       SmallChange="1" SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <ToggleSwitch x:Name="TmuxAcrylic" Header="背景半透明材质" OnContent="开" OffContent="关" />
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="背景不透明度" />
+                        <Slider x:Name="TmuxOpacity" Minimum="20" Maximum="100" StepFrequency="1" TickFrequency="10"
+                                AutomationProperties.Name="背景不透明度" />
+                        <TextBlock Text="应用到服务器列表、侧栏和终端，数值越低越透明。保存后生效。"
+                                   Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Spacing="8">
+                        <TextBox x:Name="TmuxBackgroundImage" Header="终端背景图片" PlaceholderText="不使用背景图片" />
+                        <Button Content="选择图片" Click="_TmuxBrowseBackgroundClicked" />
+                    </StackPanel>
+                    <TextBlock x:Name="TmuxPersonalizationError" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                               TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+            </ScrollViewer>
+        </ContentDialog>
+
+        <ContentDialog x:Name="TmuxNewSessionDialog" Grid.Row="2" Grid.Column="1"
+                       Title="新建会话" PrimaryButtonText="创建并打开" CloseButtonText="取消"
+                       DefaultButton="Primary" IsPrimaryButtonEnabled="False">
+            <StackPanel MinWidth="300" MaxWidth="420" Spacing="8">
+                <TextBox x:Name="TmuxNewSessionName" Header="会话名称" PlaceholderText="例如 dev、training、logs"
+                         MaxLength="80" TextChanged="_TmuxNewNameChanged" />
+                <TextBlock x:Name="TmuxNameValidation" Style="{ThemeResource CaptionTextBlockStyle}" TextWrapping="Wrap" />
+            </StackPanel>
+        </ContentDialog>
 
         <!--
             GH#12775 et. al: After switching to ControlsV2, it seems that
@@ -70,29 +344,34 @@
 
         <local:AboutDialog x:Name="AboutDialog"
                            Grid.Row="2"
+                           Grid.Column="1"
                            x:Load="False" />
 
         <ContentDialog x:Name="QuitDialog"
                        x:Uid="QuitDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Primary" />
 
         <ContentDialog x:Name="CloseAllDialog"
                        x:Uid="CloseAllDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Primary" />
 
         <ContentDialog x:Name="CloseReadOnlyDialog"
                        x:Uid="CloseReadOnlyDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Close" />
 
         <ContentDialog x:Name="MultiLinePasteDialog"
                        x:Uid="MultiLinePasteDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Primary">
             <StackPanel>
@@ -113,12 +392,14 @@
         <ContentDialog x:Name="LargePasteDialog"
                        x:Uid="LargePasteDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Primary" />
 
         <ContentDialog x:Name="ControlNoticeDialog"
                        x:Uid="ControlNoticeDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Primary">
             <TextBlock IsTextSelectionEnabled="True"
@@ -133,6 +414,7 @@
         <ContentDialog x:Name="UriErrorDialog"
                        x:Uid="UriErrorDialog"
                        Grid.Row="2"
+                       Grid.Column="1"
                        x:Load="False"
                        DefaultButton="Close">
             <TextBlock IsTextSelectionEnabled="True"
@@ -148,6 +430,7 @@
 
         <local:CommandPalette x:Name="CommandPaletteElement"
                               Grid.Row="2"
+                              Grid.Column="1"
                               VerticalAlignment="Stretch"
                               x:Load="False"
                               PreviewKeyDown="_KeyDownHandler"
@@ -155,6 +438,7 @@
 
         <local:SuggestionsControl x:Name="SuggestionsElement"
                                   Grid.Row="2"
+                                  Grid.Column="1"
                                   HorizontalAlignment="Left"
                                   VerticalAlignment="Top"
                                   x:Load="False"

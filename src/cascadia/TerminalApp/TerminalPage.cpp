@@ -23,6 +23,9 @@
 #include "SnippetsPaneContent.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
+#include "TmuxUiHelpers.h"
+#include "ContentManager.h"
+#include "SshCommandParser.h"
 
 #include "LaunchPositionRequest.g.cpp"
 #include "RenameWindowRequestedArgs.g.cpp"
@@ -453,6 +456,7 @@ namespace winrt::TerminalApp::implementation
             [=]() {
                 _adjustProcessPriority();
             });
+        _TmuxInitialize();
     }
 
     Windows::UI::Xaml::Automation::Peers::AutomationPeer TerminalPage::OnCreateAutomationPeer()
@@ -669,6 +673,17 @@ namespace winrt::TerminalApp::implementation
             {
                 CreateTabFromConnection(std::move(_startupConnection));
             }
+            else if (_tmuxWorkspaceEnabled)
+            {
+                // A normal launch starts at the server picker. Window tear-out
+                // startup actions must still adopt their existing content.
+                std::erase_if(_startupActions, [](const auto& action) {
+                    const auto args = action.Args().template try_as<NewTabArgs>();
+                    const auto terminal = args ? args.ContentArgs().template try_as<NewTerminalArgs>() : nullptr;
+                    return !terminal || terminal.ContentId() == 0;
+                });
+                if (!_startupActions.empty()) { ProcessStartupActions(std::move(_startupActions)); }
+            }
             else if (!_startupActions.empty())
             {
                 ProcessStartupActions(std::move(_startupActions));
@@ -813,7 +828,7 @@ namespace winrt::TerminalApp::implementation
         // GH#12267: Make sure that we don't instantly close ourselves when
         // we're readying to accept a defterm connection. In that case, we don't
         // have a tab yet, but will once we're initialized.
-        if (_tabs.Size() == 0)
+        if (_tabs.Size() == 0 && !_tmuxWorkspaceEnabled)
         {
             CloseWindowRequested.raise(*this, nullptr);
             co_return;
@@ -945,6 +960,14 @@ namespace winrt::TerminalApp::implementation
     //   Below the profiles are the static menu items: settings, command palette
     void TerminalPage::_CreateNewTabFlyout()
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            _newTabButton.Visibility(Visibility::Collapsed);
+            // Keep the upstream button/flyout invariant even though the
+            // local-profile entry point is hidden in this workspace.
+            _newTabButton.Flyout(WUX::Controls::MenuFlyout{});
+            return;
+        }
         auto newTabFlyout = WUX::Controls::MenuFlyout{};
         newTabFlyout.Placement(WUX::Controls::Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);
 
@@ -1359,7 +1382,11 @@ namespace winrt::TerminalApp::implementation
     // Shows the dropdown flyout.
     void TerminalPage::_OpenNewTabDropdown()
     {
-        _newTabButton.Flyout().ShowAt(_newTabButton);
+        if (_tmuxWorkspaceEnabled) { return; }
+        if (const auto flyout = _newTabButton ? _newTabButton.Flyout() : nullptr)
+        {
+            flyout.ShowAt(_newTabButton);
+        }
     }
 
     void TerminalPage::_OpenNewTerminalViaDropdown(const NewTerminalArgs newTerminalArgs)
@@ -1735,6 +1762,7 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::_KeyDownHandler(const Windows::Foundation::IInspectable& /*sender*/, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e)
     {
+        if (_tmuxDialogOpen) { return; }
         const auto keyStatus = e.KeyStatus();
         const auto vkey = gsl::narrow_cast<WORD>(e.OriginalKey());
         const auto scanCode = gsl::narrow_cast<WORD>(keyStatus.ScanCode);
@@ -2496,6 +2524,7 @@ namespace winrt::TerminalApp::implementation
         pane->WalkTree([&](auto p) {
             if (const auto& control{ p->GetTerminalControl() })
             {
+                get_self<ContentManager>(_manager)->BeginTmuxMove(control.ContentId());
                 _manager.Detach(control);
             }
         });
@@ -2645,6 +2674,25 @@ namespace winrt::TerminalApp::implementation
             args.Size() == 0)
         {
             return;
+        }
+
+        if (_tmuxWorkspaceEnabled && _tmuxServer && _tabs.Size() > 0)
+        {
+            for (const auto& action : args)
+            {
+                const auto tabArgs = action.Args().try_as<NewTabArgs>();
+                const auto terminal = tabArgs ? tabArgs.ContentArgs().try_as<NewTerminalArgs>() : nullptr;
+                const auto context = terminal ? get_self<ContentManager>(_manager)->GetTmuxContext(terminal.ContentId()) : std::nullopt;
+                if (context && !::TmuxWorkspace::sameConnection(*_tmuxServer, context->server))
+                {
+                    // Keep one server per window. The detached content is
+                    // still alive in ContentManager while a new host adopts it.
+                    std::vector<ActionAndArgs> redirected;
+                    for (const auto& entry : args) { redirected.emplace_back(entry); }
+                    _MoveContent(std::move(redirected), L"new", 0);
+                    return;
+                }
+            }
         }
 
         const auto& firstAction = args.GetAt(0);
@@ -3527,6 +3575,11 @@ namespace winrt::TerminalApp::implementation
     //   a background thread, as to not hang/crash the UI thread.
     safe_void_coroutine TerminalPage::_LaunchSettings(const SettingsTarget target)
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            _TmuxPersonalizationClicked(nullptr, nullptr);
+            co_return;
+        }
         if (target == SettingsTarget::SettingsUI)
         {
             OpenSettingsUI();
@@ -3667,6 +3720,10 @@ namespace winrt::TerminalApp::implementation
             const auto& profile = _settings.GetProfileForArgs(newTerminalArgs);
             const auto control = _AttachControlToContent(newTerminalArgs.ContentId());
             auto paneContent{ winrt::make<TerminalPaneContent>(profile, _terminalSettingsCache, control) };
+            if (get_self<ContentManager>(_manager)->GetTmuxContext(newTerminalArgs.ContentId()))
+            {
+                get_self<TerminalPaneContent>(paneContent)->KeepOpenForTmux();
+            }
             return std::make_shared<Pane>(paneContent);
         }
 
@@ -4504,6 +4561,11 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::OpenSettingsUI()
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            _TmuxPersonalizationClicked(nullptr, nullptr);
+            return;
+        }
         // If we're holding the settings tab's switch command, don't create a new one, switch to the existing one.
         if (!_settingsTab)
         {
@@ -4854,7 +4916,7 @@ namespace winrt::TerminalApp::implementation
 
             _adjustProcessPriorityThrottled->Run();
 
-            if (newConnectionState == ConnectionState::Failed && !_IsMessageDismissed(InfoBarMessage::CloseOnExitInfo))
+            if (!_tmuxWorkspaceEnabled && newConnectionState == ConnectionState::Failed && !_IsMessageDismissed(InfoBarMessage::CloseOnExitInfo))
             {
                 if (const auto infoBar = FindName(L"CloseOnExitInfoBar").try_as<MUX::Controls::InfoBar>())
                 {
@@ -5050,6 +5112,25 @@ namespace winrt::TerminalApp::implementation
             // Nothing was set in the theme - fall back to null. The window will
             // use that as an indication to use the default window frame.
             FrameBrush(nullptr);
+        }
+
+        if (_tmuxWorkspaceEnabled)
+        {
+            const auto appearance = _settings.GetProfileForArgs(NewTerminalArgs{}).DefaultAppearance();
+            const auto brush = ::TmuxWorkspace::workspaceBrush(
+                backgroundSolidBrush.Color(), appearance.Opacity(), appearance.UseAcrylic(),
+                _settings.GlobalSettings().EnableUnfocusedAcrylic());
+            TmuxServerPicker().Background(brush);
+            TmuxSidebar().Background(brush);
+            TmuxEmptyWorkspace().Background(brush);
+            if (appearance.Opacity() < 1.0f)
+            {
+                TitlebarBrush(brush);
+            }
+            // The host already paints TitlebarBrush when tabs are in the
+            // titlebar. A second layer here would obscure the transparency.
+            _tabRow.Background(_settings.GlobalSettings().ShowTabsInTitlebar() ?
+                                   Media::SolidColorBrush{ Windows::UI::Colors::Transparent() } : brush);
         }
     }
 
@@ -5771,12 +5852,16 @@ namespace winrt::TerminalApp::implementation
                                                const uint32_t tabIndex,
                                                std::optional<winrt::Windows::Foundation::Point> dragPoint)
     {
-        auto startupActions = _stashed.draggedTab->BuildStartupActions(BuildStartupKind::Content);
-        _DetachTabFromWindow(_stashed.draggedTab);
+        // _RemoveTab clears the drag stash and removes the collection's last
+        // reference. Hold the implementation until all source cleanup ends.
+        const auto draggedTab = _stashed.draggedTab;
+        if (!draggedTab) { return; }
+        auto startupActions = draggedTab->BuildStartupActions(BuildStartupKind::Content);
+        _DetachTabFromWindow(draggedTab);
 
         _MoveContent(std::move(startupActions), windowId, tabIndex, dragPoint);
         // _RemoveTab will make sure to null out the _stashed.draggedTab
-        _RemoveTab(*_stashed.draggedTab);
+        _RemoveTab(*draggedTab);
     }
 
     /// <summary>

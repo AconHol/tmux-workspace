@@ -18,7 +18,7 @@ namespace winrt::TerminalApp::implementation
     struct Tab : TabT<Tab>
     {
     public:
-        Tab(std::shared_ptr<Pane> rootPane);
+        Tab(std::shared_ptr<Pane> rootPane, bool sshWorkspace = false);
 
         // Called after construction to perform the necessary setup, which relies on weak_ptr
         void Initialize();
@@ -136,6 +136,7 @@ namespace winrt::TerminalApp::implementation
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::FrameworkElement, Content, PropertyChanged.raise, nullptr);
 
     private:
+        bool _sshWorkspace{ false };
         static constexpr double HeaderRenameBoxWidthDefault{ 165 };
         static constexpr double HeaderRenameBoxWidthTitleLength{ std::numeric_limits<double>::infinity() };
 

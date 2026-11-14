@@ -57,6 +57,13 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleOpenNewTabDropdown(const IInspectable& /*sender*/,
                                                  const ActionEventArgs& args)
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            if (_tmuxServer) { _TmuxNewSessionClicked(nullptr, nullptr); }
+            else { _TmuxAddServerClicked(nullptr, nullptr); }
+            if (args) { args.Handled(true); }
+            return;
+        }
         _OpenNewTabDropdown();
         args.Handled(true);
     }
@@ -64,6 +71,11 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleDuplicateTab(const IInspectable& /*sender*/,
                                            const ActionEventArgs& args)
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            if (args) { args.Handled(true); }
+            return;
+        }
         _DuplicateFocusedTab();
         args.Handled(true);
     }
@@ -268,6 +280,11 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleSplitPane(const IInspectable& sender,
                                         const ActionEventArgs& args)
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            if (args) { args.Handled(true); }
+            return;
+        }
         if (args == nullptr)
         {
             args.Handled(false);
@@ -459,6 +476,15 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleNewTab(const IInspectable& /*sender*/,
                                      const ActionEventArgs& args)
     {
+        const auto newTabArgs = args ? args.ActionArgs().try_as<NewTabArgs>() : nullptr;
+        const auto terminalArgs = newTabArgs ? newTabArgs.ContentArgs().try_as<NewTerminalArgs>() : nullptr;
+        if (_tmuxWorkspaceEnabled && (!terminalArgs || terminalArgs.ContentId() == 0))
+        {
+            if (_tmuxServer) { _TmuxNewSessionClicked(nullptr, nullptr); }
+            else { _TmuxAddServerClicked(nullptr, nullptr); }
+            if (args) { args.Handled(true); }
+            return;
+        }
         if (args == nullptr)
         {
             LOG_IF_FAILED(_OpenNewTab(nullptr));
@@ -651,6 +677,11 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleToggleCommandPalette(const IInspectable& /*sender*/,
                                                    const ActionEventArgs& args)
     {
+        if (_tmuxWorkspaceEnabled)
+        {
+            if (args) { args.Handled(true); }
+            return;
+        }
         if (const auto& realArgs = args.ActionArgs().try_as<ToggleCommandPaletteArgs>())
         {
             const auto p = LoadCommandPalette();

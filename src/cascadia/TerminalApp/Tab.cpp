@@ -29,8 +29,9 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
-    Tab::Tab(std::shared_ptr<Pane> rootPane)
+    Tab::Tab(std::shared_ptr<Pane> rootPane, bool sshWorkspace)
     {
+        _sshWorkspace = sshWorkspace;
         _rootPane = rootPane;
         _activePane = nullptr;
 
@@ -1652,6 +1653,45 @@ namespace winrt::TerminalApp::implementation
     void Tab::_CreateContextMenu()
     {
         auto weakThis{ get_weak() };
+        if (_sshWorkspace)
+        {
+            Controls::MenuFlyout flyout;
+            Controls::MenuFlyoutItem find;
+            find.Text(L"查找");
+            find.Click([weakThis](auto&&, auto&&) {
+                if (const auto tab = weakThis.get())
+                {
+                    tab->_dispatch.DoAction(*tab, ActionAndArgs{ ShortcutAction::Find, nullptr });
+                }
+            });
+            flyout.Items().Append(find);
+            _restartConnectionMenuItem.Text(L"重新连接");
+            _restartConnectionMenuItem.Click([weakThis](auto&&, auto&&) {
+                if (const auto tab = weakThis.get()) { tab->_RestartActivePaneConnection(); }
+            });
+            flyout.Items().Append(_restartConnectionMenuItem);
+            Controls::MenuFlyoutItem detach;
+            detach.Text(L"移到新窗口");
+            detach.Click([weakThis](auto&&, auto&&) {
+                if (const auto tab = weakThis.get())
+                {
+                    MoveTabArgs move{ L"new", MoveTabDirection::Forward };
+                    tab->_dispatch.DoAction(*tab, ActionAndArgs{ ShortcutAction::MoveTab, move });
+                }
+            });
+            flyout.Items().Append(detach);
+            Controls::MenuFlyoutItem close;
+            close.Text(L"关闭标签页");
+            close.Click([weakThis](auto&&, auto&&) {
+                if (const auto tab = weakThis.get()) { tab->CloseRequested.raise(nullptr, nullptr); }
+            });
+            flyout.Items().Append(close);
+            flyout.Closed([weakThis](auto&&, auto&&) {
+                if (const auto tab = weakThis.get()) { tab->RequestFocusActiveControl.raise(); }
+            });
+            TabViewItem().ContextFlyout(flyout);
+            return;
+        }
 
         // "Change tab color..."
         Controls::MenuFlyoutItem chooseColorMenuItem;

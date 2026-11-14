@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Reuse upstream's WinMD activation, PRI merging and native DLL packaging. -->
+  <Import Project="CascadiaPackage.wapproj" />
+  <PropertyGroup>
+    <ProjectGuid>{C653D50A-1A97-421B-A785-9F9191480E53}</ProjectGuid>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <AppxBundle>Never</AppxBundle>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <AppxGeneratePriEnabled>true</AppxGeneratePriEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(OpenConsoleDir)res\tmux-workspace\images\*.png">
+      <DeploymentContent>true</DeploymentContent>
+      <Link>Branding\%(FileName)%(Extension)</Link>
+    </Content>
+    <AppxManifest Remove="@(AppxManifest)" />
+    <AppxManifest Include="TmuxWorkspace.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+</Project>

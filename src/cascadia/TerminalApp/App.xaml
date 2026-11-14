@@ -22,6 +22,16 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"
                                        ControlsResourcesVersion="Version2" />
                 <ResourceDictionary>
+                    <!-- WinUI 2.8 supplies the Windows 11 control template but
+                         does not ship WinUI 3's named SubtleButtonStyle. Keep
+                         its native hover, focus, disabled and contrast states. -->
+                    <Style x:Key="TmuxSubtleButtonStyle"
+                           TargetType="Button"
+                           BasedOn="{StaticResource DefaultButtonStyle}">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderBrush" Value="Transparent" />
+                        <Setter Property="BorderThickness" Value="0" />
+                    </Style>
 
                     <!--
                         We're going to apply this style to the root Grid acting

@@ -233,6 +233,17 @@ namespace winrt::TerminalApp::implementation
             co_return;
         }
 
+        if (_keepOpenForTmux)
+        {
+            // A clean SSH exit means the session ended or the user detached.
+            // Return to the remaining tab/session picker. Keep failed
+            // connections available for an explicit reconnect.
+            if (newConnectionState == ConnectionState::Closed)
+            {
+                CloseRequested.raise(nullptr, nullptr);
+            }
+            co_return;
+        }
         if (_profile)
         {
             const auto mode = _profile.CloseOnExit();

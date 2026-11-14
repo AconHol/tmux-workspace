@@ -36,6 +36,7 @@ namespace winrt::TerminalApp::implementation
         void UpdateSettings(const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings);
 
         void MarkAsDefterm();
+        void KeepOpenForTmux() noexcept { _keepOpenForTmux = true; }
 
         winrt::Microsoft::Terminal::Settings::Model::Profile GetProfile() const
         {
@@ -63,6 +64,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Microsoft::Terminal::Settings::Model::Profile _profile{ nullptr };
         std::shared_ptr<TerminalSettingsCache> _cache{};
         bool _isDefTermSession{ false };
+        bool _keepOpenForTmux{ false };
 
         winrt::Windows::Media::Playback::MediaPlayer _bellPlayer{ nullptr };
         bool _bellPlayerCreated{ false };

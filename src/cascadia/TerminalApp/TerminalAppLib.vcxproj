@@ -182,10 +182,18 @@
       <DependentUpon>MarkdownPaneContent.xaml</DependentUpon>
     </ClInclude>
     <ClInclude Include="WindowsPackageManagerFactory.h" />
+    <ClInclude Include="TmuxWorkspace.h" />
+    <ClInclude Include="SshCommandParser.h" />
+    <ClInclude Include="TmuxUiHelpers.h" />
   </ItemGroup>
   <!-- ========================= Cpp Files ======================== -->
   <ItemGroup>
     <ClCompile Include="init.cpp" />
+    <ClCompile Include="TmuxWorkspace.cpp" />
+    <ClCompile Include="TmuxSidebar.cpp">
+      <PreprocessorDefinitions Condition="'$(TmuxWorkflowTests)'=='true'">TMUX_WORKFLOW_TESTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="TmuxServers.cpp" />
     <ClCompile Include="AppCommandlineArgs.cpp" />
     <ClCompile Include="Commandline.cpp" />
     <ClCompile Include="CommandPaletteItems.cpp" />

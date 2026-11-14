@@ -13,6 +13,7 @@
 #include "RequestMoveContentArgs.g.h"
 #include "LaunchPositionRequest.g.h"
 #include "Toast.h"
+#include "TmuxWorkspace.h"
 
 #include "WindowsPackageManagerFactory.h"
 
@@ -22,6 +23,7 @@ namespace TerminalAppLocalTests
 {
     class TabTests;
     class SettingsTests;
+    class TmuxWorkflowTests;
 }
 
 namespace Microsoft::Terminal::Core
@@ -210,6 +212,59 @@ namespace winrt::TerminalApp::implementation
 
     private:
         friend struct TerminalPageT<TerminalPage>; // for Xaml to bind events
+        // This dedicated build starts at the server picker and keeps the
+        // workspace alive even when its last SSH tab has been closed.
+        bool _tmuxWorkspaceEnabled{ true };
+        bool _tmuxAlive{ true };
+        bool _tmuxBusy{ false };
+        bool _tmuxDialogOpen{ false };
+        bool _tmuxUpdatingForm{ false };
+        bool _tmuxMissing{ false };
+        uint64_t _tmuxGeneration{};
+        std::optional<::TmuxWorkspace::Server> _tmuxServer;
+        std::vector<::TmuxWorkspace::Server> _tmuxSavedServers;
+        std::vector<::TmuxWorkspace::Server> _tmuxImportedServers;
+        std::vector<::TmuxWorkspace::Server> _tmuxServerChoices;
+        winrt::weak_ref<winrt::TerminalApp::Tab> _tmuxSshTab;
+        winrt::weak_ref<winrt::TerminalApp::Tab> _tmuxInstallTab;
+        std::vector<::TmuxWorkspace::Session> _tmuxSessions;
+        std::map<std::string, winrt::weak_ref<winrt::TerminalApp::Tab>> _tmuxTabs;
+        std::shared_ptr<std::atomic_bool> _tmuxCancellation{ std::make_shared<std::atomic_bool>(false) };
+        std::wstring _tmuxRenderSignature;
+        void _TmuxInitialize();
+        void _TmuxSetBusy(bool busy);
+        void _TmuxRenderSessions();
+        void _TmuxSyncSelection();
+        void _TmuxTabRemoved(const winrt::TerminalApp::Tab& tab);
+        void _TmuxRegisterTab(const winrt::TerminalApp::Tab& tab, const std::optional<::TmuxWorkspace::Session>& session = std::nullopt, bool installer = false);
+        void _TmuxRestoreTab(const winrt::TerminalApp::Tab& tab);
+        void _TmuxBindGlobalTab(const winrt::TerminalApp::Tab& tab, const std::string& sessionKey);
+        void _TmuxApplySidebarState();
+        void _TmuxToggleSidebarClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        void _TmuxOpenSession(const ::TmuxWorkspace::Session& session);
+        void _TmuxSaveServer();
+        void _TmuxRenderServers();
+        safe_void_coroutine _TmuxDiscoverServers();
+        void _TmuxConnectServer(::TmuxWorkspace::Server server);
+        ::TmuxWorkspace::Server _TmuxServerFromForm();
+        void _TmuxValidateServerForm();
+        void _TmuxSetProblem(const std::wstring& message, bool missingTmux);
+        safe_void_coroutine _TmuxAddServerClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxPersonalizationClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxBrowseBackgroundClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxInstall();
+        void _TmuxProblemActionClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        void _TmuxSshCommandChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::TextChangedEventArgs&);
+        void _TmuxDetailsChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::TextChangedEventArgs&);
+        void _TmuxServerClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::ItemClickEventArgs&);
+        safe_void_coroutine _TmuxRefresh(bool manual = false);
+        void _TmuxRefreshClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        void _TmuxVerifySshClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        safe_void_coroutine _TmuxSwitchServerClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxNewSessionClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        void _TmuxSearchChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::TextChangedEventArgs&);
+        void _TmuxNewNameChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::TextChangedEventArgs&);
+        void _TmuxSessionClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::ItemClickEventArgs&);
         std::optional<HWND> _hostingHwnd;
 
         // If you add controls here, but forget to null them either here or in
@@ -348,7 +403,7 @@ namespace winrt::TerminalApp::implementation
 
         winrt::Windows::Foundation::IAsyncAction _HandleCloseTabRequested(winrt::TerminalApp::Tab tab);
         void _CloseTabAtIndex(uint32_t index);
-        void _RemoveTab(const winrt::TerminalApp::Tab& tab);
+        void _RemoveTab(winrt::TerminalApp::Tab tab);
         safe_void_coroutine _RemoveTabs(const std::vector<winrt::TerminalApp::Tab> tabs);
 
         void _InitializeTab(winrt::com_ptr<Tab> newTabImpl, uint32_t insertPosition = -1);
@@ -577,6 +632,7 @@ namespace winrt::TerminalApp::implementation
 
         friend class TerminalAppLocalTests::TabTests;
         friend class TerminalAppLocalTests::SettingsTests;
+        friend class TerminalAppLocalTests::TmuxWorkflowTests;
     };
 }
 
