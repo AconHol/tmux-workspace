@@ -4,6 +4,7 @@
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <winrt/Windows.Storage.Streams.h>
 
 // The production PCH uses WINRT_LEAN_AND_MEAN, which omits producer
 // implementations for platform event-argument interfaces.
@@ -77,6 +78,100 @@ namespace TerminalAppLocalTests
         static void require(bool condition, const char* message)
         {
             if (!condition) { throw std::runtime_error(message); }
+        }
+        static winrt::Windows::UI::Xaml::FrameworkElement FindVisual(winrt::Windows::UI::Xaml::DependencyObject root, std::wstring_view name)
+        {
+            using namespace winrt::Windows::UI::Xaml;
+            if (const auto element = root.try_as<FrameworkElement>(); element && element.Name() == name) { return element; }
+            const auto count = Media::VisualTreeHelper::GetChildrenCount(root);
+            for (int i = 0; i < count; ++i)
+            {
+                if (const auto found = FindVisual(Media::VisualTreeHelper::GetChild(root, i), name)) { return found; }
+            }
+            return nullptr;
+        }
+        static winrt::Windows::Foundation::IAsyncAction CaptureJoin(winrt::com_ptr<Page> page, std::wstring path, bool uniform = false)
+        {
+            using namespace winrt::Windows::UI::Xaml;
+            Media::Imaging::RenderTargetBitmap bitmap;
+            co_await bitmap.RenderAsync(page->Root());
+            const auto buffer = co_await bitmap.GetPixelsAsync();
+            std::vector<uint8_t> pixels(buffer.Length());
+            winrt::Windows::Storage::Streams::DataReader::FromBuffer(buffer).ReadBytes(pixels);
+            const auto sx = bitmap.PixelWidth() / page->Root().ActualWidth();
+            const auto sy = bitmap.PixelHeight() / page->Root().ActualHeight();
+            const auto origin = page->_tabContent.TransformToVisual(page->Root()).TransformPoint({ 0, 0 });
+            const auto left = static_cast<int>((origin.X - 8) * sx);
+            const auto top = static_cast<int>(origin.Y * sy);
+            const auto width = static_cast<int>(16 * sx);
+            const auto height = std::min(bitmap.PixelHeight() - top, static_cast<int>(page->TmuxWorkspaceView().ActualHeight() * sy));
+            BITMAPFILEHEADER header{ 0x4d42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + width * height * 4), 0, 0, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) };
+            BITMAPINFOHEADER info{ sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB };
+            std::ofstream file{ std::filesystem::path{ path }, std::ios::binary };
+            file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+            file.write(reinterpret_cast<const char*>(&info), sizeof(info));
+            for (int y = top; y < top + height; ++y) { file.write(reinterpret_cast<const char*>(pixels.data() + (y * bitmap.PixelWidth() + left) * 4), width * 4); }
+            require(file.good(), "Cannot save the rendered join strip");
+            if (uniform)
+            {
+                // The central half has no sidebar buttons or terminal glyphs.
+                // A contrasting magenta root exposes even opaque layout holes.
+                for (int y = top + height / 4; y < top + height * 3 / 4; ++y)
+                {
+                    for (int x = left; x < left + width; ++x)
+                    {
+                        const auto offset = (y * bitmap.PixelWidth() + x) * 4;
+                        require(pixels[offset] == 64 && pixels[offset + 1] == 128 && pixels[offset + 2] == 32 && pixels[offset + 3] == 255,
+                                "Rendered sidebar join contains an uncovered or differently painted pixel");
+                    }
+                }
+            }
+        }
+        static winrt::Windows::Foundation::IAsyncAction ProbeJoin(winrt::com_ptr<Page> page, std::wstring directory)
+        {
+            using namespace winrt::Windows::UI::Xaml;
+            const auto oldSettings = page->_settings.Copy();
+            const auto wasMaximized = IsZoomed(*page->_hostingHwnd) != FALSE;
+            const auto wasOpen = page->TmuxWorkspaceView().IsPaneOpen();
+            ShowWindow(*page->_hostingHwnd, SW_RESTORE);
+            co_await pause(page->Dispatcher());
+            const auto opaque = oldSettings.Copy();
+            const auto appearance = opaque.GetProfileForArgs(winrt::Microsoft::Terminal::Settings::Model::NewTerminalArgs{}).DefaultAppearance();
+            appearance.Opacity(1.0f);
+            appearance.UseAcrylic(false);
+            page->SetSettings(opaque, true);
+            co_await pause(page->Dispatcher());
+            co_await CaptureJoin(page, directory + L"/opaque-current.bmp");
+            const auto root = page->Root();
+            const auto side = page->TmuxSidebar();
+            const auto terminalRoot = FindVisual(page->_GetActiveControl(), L"RootGrid").as<Controls::Grid>();
+            require(terminalRoot != nullptr, "Cannot inspect the actual terminal background");
+            const auto rootBrush = root.Background();
+            const auto sideBrush = side.Background();
+            const auto termBrush = terminalRoot.Background();
+            const auto edgeOpacity = page->TmuxSidebarDivider().Opacity();
+            auto restore = wil::scope_exit([&]() noexcept {
+                root.Background(rootBrush); side.Background(sideBrush); terminalRoot.Background(termBrush);
+                page->TmuxSidebarDivider().Opacity(edgeOpacity);
+                page->TmuxWorkspaceView().IsPaneOpen(wasOpen);
+                page->SetSettings(oldSettings, true);
+                ShowWindow(*page->_hostingHwnd, wasMaximized ? SW_MAXIMIZE : SW_RESTORE);
+            });
+            root.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 255, 255, 0, 255 } });
+            const Media::SolidColorBrush fill{ winrt::Windows::UI::Color{ 255, 32, 128, 64 } };
+            side.Background(fill);
+            terminalRoot.Background(fill);
+            page->TmuxSidebarDivider().Opacity(0);
+            // Never change the SplitView's border here: this catches a return
+            // of its themed 1-DIP transparent border, which clips Pane content
+            // before the full OpenPaneLength while Content still starts there.
+            for (const auto state : { 0, 1, 2 })
+            {
+                page->TmuxWorkspaceView().IsPaneOpen(state != 1);
+                if (state == 2) { ShowWindow(*page->_hostingHwnd, SW_MAXIMIZE); }
+                for (unsigned i = 0; i < 3; ++i) { co_await pause(page->Dispatcher()); }
+                co_await CaptureJoin(page, directory + L"/uniform-" + std::to_wstring(state) + L".bmp", true);
+            }
         }
         static void VerifySidebarJoin(const winrt::com_ptr<Page>& page)
         {
@@ -359,6 +454,12 @@ namespace TerminalAppLocalTests
                 require(page->_tabs.Size() == 2, "New session did not open its own tab");
                 for (unsigned i = 0; i < 10; ++i) { co_await pause(dispatcher); }
                 page->_FocusCurrentTab(false);
+                wchar_t joinDirectory[4096]{};
+                if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_JOIN_PROBE", joinDirectory, ARRAYSIZE(joinDirectory)))
+                {
+                    co_await ProbeJoin(page, joinDirectory);
+                    note("PIXELS: opaque join rendered without uncovered pixels in expanded, compact and maximized layouts");
+                }
                 // Send a marker only to the shell in the test-owned session,
                 // through SSH/tmux. Never send input to an existing user pane.
                 const auto markerCommand = "tmux send-keys -t " + ::TmuxWorkspace::quoteShell(ownedSession->id) +
@@ -374,8 +475,10 @@ namespace TerminalAppLocalTests
                     if (std::wstring_view(page->_GetActiveControl().ReadEntireBuffer()).find(L"CODEX_WORKFLOW_OK") != std::wstring_view::npos) { rendered = true; break; }
                     co_await pause(dispatcher);
                 }
+                if (!rendered) { log << "OWNED TERMINAL: " << to_string(page->_GetActiveControl().ReadEntireBuffer()).substr(0, 1600) << std::endl; }
                 require(rendered, "Actual terminal did not display the output of the remote tmux shell");
                 note("CREATE: queued native text and Enter created a real tmux shell and its output reached TermControl");
+
 
                 wchar_t aiBaseUrl[4096]{};
                 if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_AI_URL", aiBaseUrl, ARRAYSIZE(aiBaseUrl)))

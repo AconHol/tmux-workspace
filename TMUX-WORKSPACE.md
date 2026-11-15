@@ -1,4 +1,10 @@
-# Tmux Workspace 0.5.0
+# Tmux Workspace 0.5.1
+
+0.5.1 清除 SplitView 控件本身的主题边框占位。该透明边框会把侧栏内容的实际绘制宽度
+缩短 1 DIP，而终端仍从完整侧栏宽度之后开始，留下可见漏底；250% 缩放时占 3 个物理像素。
+现在显式设置 SplitView.BorderThickness=0，保留另行绘制的不透明分隔线。
+回归会采样实际 XAML 绘制像素，在对照背景上检查展开、折叠和最大化布局，
+不再仅以 ActualWidth 或元素坐标接近作为交界处正确的依据。
 
 0.5.0 在侧栏底部加入 tmux 快捷操作和可配置 API 的 AI 翻译。
 侧栏交界线改为独立绘制的不透明主题色，背景不透明度不再影响它。
@@ -23,7 +29,7 @@
 参考：[Chat Completions 接口](https://developers.openai.com/api/reference/resources/chat)、
 [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)。
 
-0.4.2 移除会话侧栏右侧额外的卡片边框，使透明背景覆盖到侧栏与终端的交界处。
+0.4.2 移除会话侧栏右侧额外的卡片边框。
 
 基于 Microsoft Windows Terminal v1.25.3131.0，
 基线提交 f88b209f1e57e1d8ca35977260c3cddacccaeb31。

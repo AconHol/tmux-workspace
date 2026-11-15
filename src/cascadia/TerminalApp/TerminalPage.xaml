@@ -70,6 +70,7 @@
 
         <SplitView x:Name="TmuxWorkspaceView" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"
                    DisplayMode="CompactInline" IsPaneOpen="True" OpenPaneLength="280" CompactPaneLength="48"
+                   BorderThickness="0"
                    PanePlacement="Left" PaneBackground="Transparent" Background="Transparent">
             <SplitView.Pane>
                 <Border x:Name="TmuxSidebar" Width="280"

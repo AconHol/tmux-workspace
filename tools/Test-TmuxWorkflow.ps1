@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $SshCommand,
     [string] $WorkDirectory,
     [string] $AiBaseUrl,
+    [string] $JoinProbeDirectory,
     [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,9 @@ if (-not $WorkDirectory) { $WorkDirectory = Join-Path $repo 'artifacts\workflow'
 $WorkDirectory = [IO.Path]::GetFullPath($WorkDirectory)
 $appDirectory = Join-Path $WorkDirectory 'app'
 $report = Join-Path $WorkDirectory 'workflow-result.txt'
+if (-not $JoinProbeDirectory) { $JoinProbeDirectory = Join-Path $WorkDirectory 'join-pixels' }
+$JoinProbeDirectory = [IO.Path]::GetFullPath($JoinProbeDirectory)
+New-Item -ItemType Directory -Path $JoinProbeDirectory -Force | Out-Null
 $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vsRoot = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\amd64\MSBuild.exe'
@@ -44,6 +48,7 @@ try {
     $start.Environment['TMUX_WORKFLOW_SERVER'] = $SshCommand
     $start.Environment['TMUX_WORKFLOW_REPORT'] = $report
     if ($AiBaseUrl) { $start.Environment['TMUX_WORKFLOW_AI_URL'] = $AiBaseUrl }
+    if ($JoinProbeDirectory) { $start.Environment['TMUX_WORKFLOW_JOIN_PROBE'] = [IO.Path]::GetFullPath($JoinProbeDirectory) }
     $process = [Diagnostics.Process]::Start($start)
     if (-not $process.WaitForExit(60000)) {
         if (-not $process.WaitForExit(60000)) {
@@ -54,7 +59,8 @@ try {
     }
     if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
     if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report) -or
-        -not (Select-String -LiteralPath $report -SimpleMatch 'PASS: real workspace workflow completed' -Quiet)) {
+        -not (Select-String -LiteralPath $report -SimpleMatch 'PASS: real workspace workflow completed' -Quiet) -or
+        -not (Select-String -LiteralPath $report -SimpleMatch 'PIXELS: opaque join rendered without uncovered pixels' -Quiet)) {
         throw "Workspace workflow failed with exit code $($process.ExitCode)."
     }
 }
