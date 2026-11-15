@@ -57,8 +57,7 @@
                    PanePlacement="Left" PaneBackground="Transparent" Background="Transparent">
             <SplitView.Pane>
                 <Border x:Name="TmuxSidebar" Width="280"
-                        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,1,0">
+                        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
                     <Grid>
                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                         <Button x:Name="TmuxSidebarToggle" Width="40" Height="40" Margin="4"

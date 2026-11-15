@@ -1,4 +1,6 @@
-# Tmux Workspace 0.4.1
+# Tmux Workspace 0.4.2
+
+0.4.2 移除会话侧栏右侧额外的卡片边框，使透明背景覆盖到侧栏与终端的交界处。
 
 基于 Microsoft Windows Terminal v1.25.3131.0，
 基线提交 f88b209f1e57e1d8ca35977260c3cddacccaeb31。

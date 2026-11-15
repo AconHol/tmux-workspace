@@ -77,6 +77,16 @@ namespace TerminalAppLocalTests
         {
             if (!condition) { throw std::runtime_error(message); }
         }
+        static void VerifySidebarJoin(const winrt::com_ptr<Page>& page)
+        {
+            const auto workspace = page->TmuxWorkspaceView();
+            const auto content = page->_tabContent;
+            const auto paneWidth = workspace.IsPaneOpen() ? workspace.OpenPaneLength() : workspace.CompactPaneLength();
+            const auto origin = content.TransformToVisual(workspace).TransformPoint({ 0, 0 });
+            require(std::abs(origin.X - paneWidth) < 0.01 &&
+                    std::abs(origin.X + content.ActualWidth() - workspace.ActualWidth()) < 0.01,
+                    "The terminal must directly adjoin the visible sidebar without a layout gap");
+        }
         static winrt::Windows::UI::Xaml::Controls::ItemClickEventArgs clickArgs(winrt::Windows::Foundation::IInspectable item)
         {
             return winrt::make<WorkflowClickArgs>(std::move(item)).as<winrt::Windows::UI::Xaml::Controls::ItemClickEventArgs>();
@@ -240,14 +250,17 @@ namespace TerminalAppLocalTests
                 note("REUSE: selecting the same session returned to its existing tab");
 
                 const auto expandedWidth = page->_tabContent.ActualWidth();
+                VerifySidebarJoin(page);
                 page->_TmuxToggleSidebarClicked(nullptr, nullptr);
                 for (unsigned i = 0; i < 3; ++i) { co_await pause(dispatcher); }
                 require(!page->TmuxWorkspaceView().IsPaneOpen() && page->TmuxSidebarRail().Visibility() == Visibility::Visible && page->_tabContent.ActualWidth() >= expandedWidth + 220,
                         "Compact sidebar did not collapse to the native rail");
+                VerifySidebarJoin(page);
                 page->_TmuxToggleSidebarClicked(nullptr, nullptr);
                 for (unsigned i = 0; i < 3; ++i) { co_await pause(dispatcher); }
                 require(page->TmuxWorkspaceView().IsPaneOpen() && page->TmuxSidebarBody().Visibility() == Visibility::Visible && page->_tabContent.ActualWidth() <= expandedWidth + 1,
                         "Expanded sidebar did not restore its content");
+                VerifySidebarJoin(page);
                 require(std::wstring_view(page->TmuxStatus().Text()).find(L"5 秒") == std::wstring_view::npos, "Polling text is still visible");
                 note("SIDEBAR: native compact rail collapsed and expanded while the terminal remained connected");
 
@@ -269,6 +282,8 @@ namespace TerminalAppLocalTests
                 translucentAppearance.UseAcrylic(true);
                 page->SetSettings(translucent, true);
                 co_await pause(dispatcher);
+                VerifySidebarJoin(page);
+                note("LAYOUT: expanded and compact sidebar edges directly adjoined the terminal; no gap at maximized 20-percent acrylic opacity");
                 for (const auto serverForm : { true, false })
                 {
                     inputFailure->clear();
