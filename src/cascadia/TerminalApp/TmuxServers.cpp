@@ -42,6 +42,70 @@ namespace
 
 namespace winrt::TerminalApp::implementation
 {
+    Windows::Foundation::IAsyncOperation<ContentDialogResult> TerminalPage::ShowTmuxInputDialog(ContentDialog dialog)
+    {
+        // https://learn.microsoft.com/windows/apps/desktop/modernize/xaml-islands/xaml-islands
+        // Input controls must remain in the island's normal visual tree.
+        const auto lifetime = get_strong();
+        const auto dispatcher = Dispatcher();
+        if (_tmuxDismissInput || !dialog) { co_return ContentDialogResult::None; }
+        const auto body = dialog.Content();
+        const auto previousFocus = Input::FocusManager::GetFocusedElement(XamlRoot()).try_as<Control>();
+        wil::unique_handle completed{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        THROW_LAST_ERROR_IF(!completed);
+        auto result = ContentDialogResult::None;
+        bool finished{};
+        const auto finish = [&](ContentDialogResult answer) {
+            if (!finished) { finished = true; result = answer; SetEvent(completed.get()); }
+        };
+        _tmuxDismissInput = [&]() { finish(ContentDialogResult::None); };
+        const auto sync = [this, dialog]() {
+            TmuxInputPrimary().Content(box_value(dialog.PrimaryButtonText()));
+            TmuxInputPrimary().IsEnabled(dialog.IsPrimaryButtonEnabled());
+        };
+        dialog.Content(nullptr);
+        auto restore = wil::scope_exit([&]() noexcept {
+            _tmuxDismissInput = {};
+            try
+            {
+                TmuxInputLayer().Visibility(Visibility::Collapsed);
+                TmuxInputBody().Content(nullptr);
+                dialog.Content(body);
+                if (previousFocus) { previousFocus.Focus(FocusState::Programmatic); }
+            }
+            CATCH_LOG();
+        });
+        TmuxInputLayer().RequestedTheme(_settings.GlobalSettings().CurrentTheme().RequestedTheme());
+        TmuxInputTitle().Text(unbox_value_or<hstring>(dialog.Title(), hstring{}));
+        Automation::AutomationProperties::SetName(TmuxInputCard(), TmuxInputTitle().Text());
+        TmuxInputClose().Content(box_value(dialog.CloseButtonText()));
+        TmuxInputBody().Content(body);
+        sync();
+        const auto enabledToken = dialog.RegisterPropertyChangedCallback(ContentDialog::IsPrimaryButtonEnabledProperty(), [sync](auto&&, auto&&) { sync(); });
+        const auto textToken = dialog.RegisterPropertyChangedCallback(ContentDialog::PrimaryButtonTextProperty(), [sync](auto&&, auto&&) { sync(); });
+        auto detachBindings = wil::scope_exit([&]() noexcept {
+            dialog.UnregisterPropertyChangedCallback(ContentDialog::IsPrimaryButtonEnabledProperty(), enabledToken);
+            dialog.UnregisterPropertyChangedCallback(ContentDialog::PrimaryButtonTextProperty(), textToken);
+        });
+        const auto fit = [this]() { TmuxInputCard().MaxHeight(std::max(160.0, Root().ActualHeight() - 48.0)); };
+        fit();
+        auto resize = Root().SizeChanged(auto_revoke, [fit](auto&&, auto&&) { fit(); });
+        auto accept = TmuxInputPrimary().Click(auto_revoke, [&](auto&&, auto&&) { if (dialog.IsPrimaryButtonEnabled()) { finish(ContentDialogResult::Primary); } });
+        auto cancel = TmuxInputClose().Click(auto_revoke, [&](auto&&, auto&&) { finish(ContentDialogResult::None); });
+        auto keyboard = TmuxInputLayer().KeyDown(auto_revoke, [&](auto&&, const Input::KeyRoutedEventArgs& event) {
+            if (event.Key() == Windows::System::VirtualKey::Escape) { finish(ContentDialogResult::None); event.Handled(true); }
+            else if (event.Key() == Windows::System::VirtualKey::Enter && dialog.IsPrimaryButtonEnabled()) { finish(ContentDialogResult::Primary); event.Handled(true); }
+        });
+        TmuxInputLayer().Visibility(Visibility::Visible);
+        co_await resume_foreground(dispatcher, Windows::UI::Core::CoreDispatcherPriority::Low);
+        if (dialog.Name() == L"TmuxNewSessionDialog") { TmuxNewSessionName().Focus(FocusState::Programmatic); }
+        else if (dialog.Name() == L"TmuxAddServerDialog") { TmuxSshCommand().Focus(FocusState::Programmatic); }
+        else { TmuxTheme().Focus(FocusState::Programmatic); }
+        co_await resume_on_signal(completed.get());
+        co_await resume_foreground(dispatcher);
+        co_return result;
+    }
+
     safe_void_coroutine TerminalPage::_TmuxDiscoverServers()
     {
         const auto lifetime = get_strong();

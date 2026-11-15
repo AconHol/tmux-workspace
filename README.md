@@ -16,6 +16,7 @@ Choose a server, then open its tmux sessions from a permanent, collapsible sideb
 - Collapse the native sidebar to a compact icon rail. Theme, font, color scheme, background opacity, acrylic and image customization are available.
 - If tmux is missing, the app offers an explicit install action in an interactive SSH terminal.
 - No fixed five-second polling. Refresh manually or after relevant workspace operations.
+- Editable forms stay in the main XAML Island with native WinUI controls. UWP ContentDialog text input is unsupported in that host, so the app does not use its popup surface for editable forms.
 
 ## 下载与使用
 
@@ -47,7 +48,7 @@ The app icon source and Windows variants are in [res/tmux-workspace](res/tmux-wo
 
 ## Validation and scope
 
-The functional workspace was exercised against a real Linux server with tmux 3.6 using the actual TerminalPage and TermControl, including session creation, output rendering, dialog focus, opacity, tab tear-out, cross-window activation, simultaneous open requests and owner-close/reopen. The icon release also verifies the embedded executable icon and MSIX logo payload. Full physical mouse/keyboard and visual accessibility acceptance is not claimed.
+The functional workspace was exercised against a real Linux server with tmux 3.6 using the actual TerminalPage and TermControl, including session creation, output rendering, form focus, opacity, tab tear-out, cross-window activation, simultaneous open requests and owner-close/reopen. Form regression checks queue native WM_CHAR/key messages and verify resulting text, dismissal and remote creation; they do not only assign Text properties. Low-opacity acrylic and maximized layout are also exercised. Full physical keyboard/mouse, IME composition and visual accessibility acceptance is not claimed. See Microsoft's [XAML Islands limitations](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/xaml-islands/xaml-islands).
 
 ```powershell
 # Creates and cleans up test-owned sessions on the specified server.

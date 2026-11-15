@@ -43,16 +43,17 @@ namespace TerminalAppLocalTests
 
     struct WorkflowLiveDialog : winrt::implements<WorkflowLiveDialog, winrt::TerminalApp::IDialogPresenter>
     {
-        winrt::Windows::UI::Xaml::XamlRoot root{ nullptr };
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
         std::function<void(winrt::Windows::UI::Xaml::Controls::ContentDialog)> opened;
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> ShowDialog(
             winrt::Windows::UI::Xaml::Controls::ContentDialog dialog)
         {
-            dialog.XamlRoot(root);
-            const auto token = dialog.Opened([this](auto&& sender, auto&&) { opened(sender.template as<winrt::Windows::UI::Xaml::Controls::ContentDialog>()); });
-            const auto result = co_await dialog.ShowAsync();
-            dialog.Opened(token);
-            co_return result;
+            const auto dispatcher = page->Dispatcher();
+            const auto showing = page->ShowTmuxInputDialog(dialog);
+            co_await winrt::resume_after(std::chrono::milliseconds{ 250 });
+            co_await winrt::resume_foreground(dispatcher);
+            opened(dialog);
+            co_return co_await showing;
         }
     };
 
@@ -87,6 +88,18 @@ namespace TerminalAppLocalTests
             {
                 page->TmuxNewSessionName().Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
                 co_await pause(page->Dispatcher());
+                require(page->TmuxInputLayer().Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible &&
+                        page->TmuxInputLayer().ActualWidth() == page->Root().ActualWidth() &&
+                        page->TmuxInputLayer().ActualHeight() == page->Root().ActualHeight(), "Inline modal layer does not cover the actual app bounds");
+                const auto nativeInput = GetFocus();
+                require(nativeInput != nullptr, "Native keyboard focus is missing");
+                for (const auto ch : std::wstring_view{ L"key测试" })
+                {
+                    require(PostMessageW(nativeInput, WM_CHAR, ch, 1) != FALSE, "Cannot queue a character to the XAML Island input window");
+                    co_await pause(page->Dispatcher());
+                }
+                require(page->TmuxNewSessionName().Text() == L"key测试", "Queued Latin and Unicode characters did not reach the editable form");
+                page->TmuxNewSessionName().Text(L"");
                 std::wstring typed;
                 for (const auto ch : std::wstring_view(existing))
                 {
@@ -104,10 +117,54 @@ namespace TerminalAppLocalTests
                 require(page->TmuxNewSessionName().Text() == typed && page->TmuxNewSessionName().FocusState() != winrt::Windows::UI::Xaml::FocusState::Unfocused,
                         "Cannot continue editing after a duplicate name");
                 require(dialog.PrimaryButtonText() == L"新建并打开", "Edited name did not restore the create action");
+                const auto shade = page->TmuxInputLayer().Background().as<winrt::Windows::UI::Xaml::Media::SolidColorBrush>().Color();
+                require(shade.R == 0 && shade.G == 0 && shade.B == 0 && shade.A == 102, "The overlay must use the bounded dark shade rather than popup smoke");
             }
             catch (const std::exception& error) { *failure = error.what(); }
             catch (...) { *failure = "Native dialog input probe failed"; }
-            dialog.Hide();
+            if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
+        }
+        static winrt::Windows::Foundation::IAsyncAction ProbeOtherForm(winrt::com_ptr<Page> page, winrt::Windows::UI::Xaml::Controls::TextBox field, std::shared_ptr<std::string> failure)
+        {
+            try
+            {
+                field.Text(L"");
+                field.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                co_await pause(page->Dispatcher());
+                const auto input = GetFocus();
+                require(input != nullptr, "Native form input has no focused host window");
+                for (const auto ch : std::wstring_view{ L"key测试" })
+                {
+                    require(PostMessageW(input, WM_CHAR, ch, 1) != FALSE, "Cannot queue native form input");
+                    co_await pause(page->Dispatcher());
+                }
+                require(field.Text() == L"key测试", "Native input did not reach the server or appearance form");
+                PostMessageW(input, WM_KEYDOWN, VK_ESCAPE, 1);
+                PostMessageW(input, WM_KEYUP, VK_ESCAPE, 0xc0000001);
+                co_await pause(page->Dispatcher());
+                require(page->TmuxInputLayer().Visibility() == winrt::Windows::UI::Xaml::Visibility::Collapsed, "Escape did not dismiss the inline form");
+            }
+            catch (const std::exception& error) { *failure = error.what(); }
+            catch (...) { *failure = "Server or appearance native-input probe failed"; }
+            if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
+        }
+        static winrt::Windows::Foundation::IAsyncAction TypeAndCreate(winrt::com_ptr<Page> page, winrt::hstring name, std::shared_ptr<std::string> failure)
+        {
+            try
+            {
+                page->TmuxNewSessionName().Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                co_await pause(page->Dispatcher());
+                const auto input = GetFocus();
+                require(input != nullptr, "Session creation has no native input focus");
+                for (const auto ch : std::wstring_view(name)) { PostMessageW(input, WM_CHAR, ch, 1); }
+                co_await pause(page->Dispatcher());
+                require(page->TmuxNewSessionName().Text() == name && page->TmuxInputPrimary().IsEnabled(), "Typing did not enable the visible create button");
+                PostMessageW(input, WM_KEYDOWN, VK_RETURN, 1);
+                PostMessageW(input, WM_KEYUP, VK_RETURN, 0xc0000001);
+            }
+            catch (const std::exception& error) { *failure = error.what(); }
+            catch (...) { *failure = "Native Enter submission failed"; }
+            if (!failure->empty() && page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
         }
     public:
         static void Start(winrt::com_ptr<Page> page)
@@ -196,14 +253,36 @@ namespace TerminalAppLocalTests
 
                 const auto inputFailure = std::make_shared<std::string>();
                 auto liveDialog = make_self<WorkflowLiveDialog>();
-                liveDialog->root = page->XamlRoot();
+                liveDialog->page = page;
                 liveDialog->opened = [page, first, inputFailure](ContentDialog dialog) { ProbeNameInput(page, dialog, to_hstring(first.name), inputFailure); };
                 page->DialogPresenter(liveDialog.as<winrt::TerminalApp::IDialogPresenter>());
                 page->_TmuxNewSessionClicked(nullptr, nullptr);
                 for (unsigned i = 0; page->_tmuxDialogOpen && i < 100; ++i) { co_await pause(dispatcher); }
                 require(!page->_tmuxDialogOpen && inputFailure->empty(), inputFailure->empty() ? "Live name dialog did not close" : inputFailure->c_str());
                 for (unsigned i = 0; page->_tmuxBusy && i < 100; ++i) { co_await pause(dispatcher); }
-                note("INPUT: real ContentDialog retained text focus after a duplicate name and accepted continued editing");
+                note("INPUT: native WM_CHAR messages reached the in-island textbox; editing a duplicate retained input focus");
+
+                ShowWindow(*page->_hostingHwnd, SW_MAXIMIZE);
+                const auto translucent = page->_settings.Copy();
+                const auto translucentAppearance = translucent.GetProfileForArgs(NewTerminalArgs{}).DefaultAppearance();
+                translucentAppearance.Opacity(0.2f);
+                translucentAppearance.UseAcrylic(true);
+                page->SetSettings(translucent, true);
+                co_await pause(dispatcher);
+                for (const auto serverForm : { true, false })
+                {
+                    inputFailure->clear();
+                    liveDialog->opened = [page, serverForm, inputFailure](ContentDialog) {
+                        ProbeOtherForm(page, serverForm ? page->TmuxSshCommand() : page->TmuxFontFace(), inputFailure);
+                    };
+                    if (serverForm) { page->_TmuxAddServerClicked(nullptr, nullptr); }
+                    else { page->_TmuxPersonalizationClicked(nullptr, nullptr); }
+                    for (unsigned i = 0; page->_tmuxDialogOpen && i < 60; ++i) { co_await pause(dispatcher); }
+                    co_await pause(dispatcher);
+                    require(!page->_tmuxDialogOpen && inputFailure->empty(), inputFailure->empty() ? "Native input form stayed open" : inputFailure->c_str());
+                    require(!page->_tmuxDismissInput, "Input form left a pending modal operation");
+                }
+                note("INPUT: server and appearance forms received native Latin/Unicode characters and dismissed with Escape at 20-percent acrylic opacity in a maximized window");
 
                 const auto name = L"codex-check-" + std::to_wstring(GetTickCount64());
                 auto dialogs = make_self<WorkflowDialogs>();
@@ -213,12 +292,12 @@ namespace TerminalAppLocalTests
                 for (unsigned i = 0; (page->_tmuxDialogOpen || page->_tmuxBusy) && i < 100; ++i) { co_await pause(dispatcher); }
                 require(page->_tabs.Size() == 1, "Accepting a duplicate name created another tab");
                 note("DUPLICATE: accepting an existing name selected its original tab");
-                dialogs->prepare = [&](ContentDialog dialog) {
-                    require(dialog == page->TmuxNewSessionDialog(), "Unexpected dialog during session creation");
-                    page->TmuxNewSessionName().Text(name);
-                };
+                inputFailure->clear();
+                liveDialog->opened = [page, name, inputFailure](ContentDialog) { TypeAndCreate(page, hstring{ name }, inputFailure); };
+                page->DialogPresenter(liveDialog.as<winrt::TerminalApp::IDialogPresenter>());
                 page->_TmuxNewSessionClicked(nullptr, nullptr);
                 for (unsigned i = 0; (page->_tmuxDialogOpen || page->_tmuxBusy) && i < 100; ++i) { co_await pause(dispatcher); }
+                require(inputFailure->empty(), inputFailure->empty() ? "Native submit failed" : inputFailure->c_str());
                 const auto found = std::find_if(page->_tmuxSessions.begin(), page->_tmuxSessions.end(), [&](const auto& session) { return session.name == to_string(name); });
                 require(found != page->_tmuxSessions.end(), "New-session button did not create a remote session");
                 ownedSession = *found;
@@ -241,13 +320,14 @@ namespace TerminalAppLocalTests
                     co_await pause(dispatcher);
                 }
                 require(rendered, "Actual terminal did not display the output of the remote tmux shell");
-                note("CREATE: new-session path created a real tmux shell and its output reached TermControl");
+                note("CREATE: queued native text and Enter created a real tmux shell and its output reached TermControl");
 
                 dialogs->prepare = [&](ContentDialog dialog) {
                     require(dialog == page->TmuxPersonalizationDialog(), "Unexpected personalization dialog");
                     page->TmuxAcrylic().IsOn(false);
                     page->TmuxOpacity().Value(60);
                 };
+                page->DialogPresenter(dialogs.as<winrt::TerminalApp::IDialogPresenter>());
                 page->_TmuxPersonalizationClicked(nullptr, nullptr);
                 for (unsigned i = 0; page->_tmuxDialogOpen && i < 30; ++i) { co_await pause(dispatcher); }
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }

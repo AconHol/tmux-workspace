@@ -146,6 +146,7 @@ namespace winrt::TerminalApp::implementation
 
         winrt::TerminalApp::IDialogPresenter DialogPresenter() const;
         void DialogPresenter(winrt::TerminalApp::IDialogPresenter dialogPresenter);
+        Windows::Foundation::IAsyncOperation<Windows::UI::Xaml::Controls::ContentDialogResult> ShowTmuxInputDialog(Windows::UI::Xaml::Controls::ContentDialog dialog);
 
         winrt::TerminalApp::TaskbarState TaskbarState() const;
 
@@ -231,6 +232,7 @@ namespace winrt::TerminalApp::implementation
         std::map<std::string, winrt::weak_ref<winrt::TerminalApp::Tab>> _tmuxTabs;
         std::shared_ptr<std::atomic_bool> _tmuxCancellation{ std::make_shared<std::atomic_bool>(false) };
         std::wstring _tmuxRenderSignature;
+        std::function<void()> _tmuxDismissInput;
         void _TmuxInitialize();
         void _TmuxSetBusy(bool busy);
         void _TmuxRenderSessions();

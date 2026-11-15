@@ -2340,6 +2340,7 @@ namespace winrt::TerminalApp::implementation
     //   than one tab opened, show a warning dialog.
     safe_void_coroutine TerminalPage::CloseWindow()
     {
+        if (_tmuxDismissInput) { _tmuxDismissInput(); }
         if (_HasMultipleTabs() &&
             _settings.GlobalSettings().ConfirmCloseAllTabs() &&
             !_displayingCloseDialog)

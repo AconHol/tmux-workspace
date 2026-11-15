@@ -118,6 +118,7 @@ namespace winrt::TerminalApp::implementation
             if (const auto page = weak.get())
             {
                 page->_tmuxAlive = false;
+                if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
                 page->_tmuxCancellation->store(true);
                 get_self<ContentManager>(page->_manager)->UnregisterTmuxWindow(reinterpret_cast<uintptr_t>(page.get()));
             }
