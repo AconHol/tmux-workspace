@@ -294,3 +294,6 @@ profiles.json
 
 # MSBuildCache
 /MSBuildCacheLogs/
+
+# Local AI endpoint settings include a user-protected API credential.
+tmux-ai.json

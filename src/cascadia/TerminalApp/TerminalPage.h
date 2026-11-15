@@ -233,6 +233,17 @@ namespace winrt::TerminalApp::implementation
         std::shared_ptr<std::atomic_bool> _tmuxCancellation{ std::make_shared<std::atomic_bool>(false) };
         std::wstring _tmuxRenderSignature;
         std::function<void()> _tmuxDismissInput;
+        bool _tmuxActionBusy{ false };
+        bool _tmuxTranslationBusy{ false };
+        winrt::weak_ref<winrt::Microsoft::Terminal::Control::TermControl> _tmuxTranslationTarget;
+        std::shared_ptr<std::atomic_bool> _tmuxTranslationCancellation;
+        void _TmuxUpdateTools();
+        safe_void_coroutine _TmuxActionClicked(Windows::Foundation::IInspectable sender, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxTranslateClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxTranslateSubmit();
+        void _TmuxTranslationChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::TextChangedEventArgs&);
+        void _TmuxTranslationKeyChanged(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        void _TmuxValidateTranslation();
         void _TmuxInitialize();
         void _TmuxSetBusy(bool busy);
         void _TmuxRenderSessions();

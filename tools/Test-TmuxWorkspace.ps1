@@ -3,6 +3,7 @@
 param(
     [string] $WorkDirectory,
     [switch] $WithSshFixture,
+    [switch] $WithAiFixture,
     [switch] $WithXaml
 )
 $ErrorActionPreference = 'Stop'
@@ -34,6 +35,12 @@ try {
         if ($LASTEXITCODE) { throw 'SSH test compilation failed. Build Release x64 first.' }
         & python src\cascadia\LocalTests_TmuxWorkspace\ssh_fixture.py (Join-Path $WorkDirectory 'tmux-ssh-tests.exe') --work-directory $WorkDirectory
         if ($LASTEXITCODE) { throw 'SSH tests failed. The optional fixture requires Python and Paramiko.' }
+    }
+    if ($WithAiFixture) {
+        & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /MT src\cascadia\LocalTests_TmuxWorkspace\ai_tests.cpp obj\x64\Release\TerminalAppLib\TmuxAi.obj obj\x64\Release\TerminalAppLib\pch.obj obj\x64\vcpkg\x64-windows-static\lib\jsoncpp.lib obj\x64\vcpkg\x64-windows-static\lib\CLI11.lib "/Fo:$WorkDirectory\tmux-ai-tests.obj" "/Fe:$WorkDirectory\tmux-ai-tests.exe" /link /LTCG /NODEFAULTLIB:libucrt.lib /DEFAULTLIB:ucrt.lib WindowsApp.lib winhttp.lib crypt32.lib
+        if ($LASTEXITCODE) { throw 'AI test compilation failed. Build Release x64 first.' }
+        & python src\cascadia\LocalTests_TmuxWorkspace\ai_fixture.py -- (Join-Path $WorkDirectory 'tmux-ai-tests.exe') '{base_url}' (Join-Path $WorkDirectory 'isolated-ai.json')
+        if ($LASTEXITCODE) { throw 'AI API fixture tests failed.' }
     }
 }
 finally {

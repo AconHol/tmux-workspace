@@ -4917,6 +4917,8 @@ namespace winrt::TerminalApp::implementation
 
             _adjustProcessPriorityThrottled->Run();
 
+            if (_tmuxWorkspaceEnabled && _tmuxAlive) { _TmuxUpdateTools(); }
+
             if (!_tmuxWorkspaceEnabled && newConnectionState == ConnectionState::Failed && !_IsMessageDismissed(InfoBarMessage::CloseOnExitInfo))
             {
                 if (const auto infoBar = FindName(L"CloseOnExitInfoBar").try_as<MUX::Controls::InfoBar>())

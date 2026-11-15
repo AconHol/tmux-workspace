@@ -198,6 +198,21 @@ namespace TmuxWorkspace
         return "tmux new-session -d -P -F " + quoteShell(sessionFormat) + " -s " + quoteShell(name);
     }
 
+    inline std::string actionCommand(const Session& session, std::wstring_view action)
+    {
+        const auto target = quoteShell(session.id);
+        if (action == L"split-horizontal") { return "tmux split-window -h -t " + target; }
+        if (action == L"split-vertical") { return "tmux split-window -v -t " + target; }
+        if (action == L"next-pane") { return "tmux select-pane -t " + quoteShell(session.id + ":.+"); }
+        if (action == L"zoom-pane") { return "tmux resize-pane -Z -t " + target; }
+        if (action == L"new-window") { return "tmux new-window -t " + quoteShell(session.id + ":"); }
+        if (action == L"previous-window") { return "tmux previous-window -t " + target; }
+        if (action == L"next-window") { return "tmux next-window -t " + target; }
+        if (action == L"next-layout") { return "tmux next-layout -t " + target; }
+        if (action == L"copy-mode") { return "tmux copy-mode -t " + target; }
+        throw std::invalid_argument("Unknown tmux action");
+    }
+
     inline std::string attachCommand(const Session& session)
     {
         // The leading '=' requests an exact match rather than tmux's prefix and

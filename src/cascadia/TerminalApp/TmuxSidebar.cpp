@@ -118,6 +118,7 @@ namespace winrt::TerminalApp::implementation
             if (const auto page = weak.get())
             {
                 page->_tmuxAlive = false;
+                if (page->_tmuxTranslationCancellation) { page->_tmuxTranslationCancellation->store(true); }
                 if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
                 page->_tmuxCancellation->store(true);
                 get_self<ContentManager>(page->_manager)->UnregisterTmuxWindow(reinterpret_cast<uintptr_t>(page.get()));
@@ -162,6 +163,9 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_TmuxApplySidebarState()
     {
         const auto open = TmuxWorkspaceView().IsPaneOpen();
+        // Paint above the independent acrylic surfaces with a fully opaque
+        // brush. Background opacity applies only to their fills, never this edge.
+        TmuxSidebarDivider().Margin(Thickness{ open ? TmuxWorkspaceView().OpenPaneLength() : TmuxWorkspaceView().CompactPaneLength(), 0, 0, 0 });
         TmuxSidebarBody().Visibility(open ? Visibility::Visible : Visibility::Collapsed);
         TmuxSidebarRail().Visibility(open ? Visibility::Collapsed : Visibility::Visible);
         const auto label = open ? L"折叠会话侧栏" : L"展开会话侧栏";
@@ -291,6 +295,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_TmuxRenderSessions()
     {
+        _TmuxUpdateTools();
         if (!_tmuxServer || _tmuxDialogOpen)
         {
             return;

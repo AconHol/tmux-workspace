@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory)] [string] $SshCommand,
     [string] $WorkDirectory,
+    [string] $AiBaseUrl,
     [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -42,11 +43,14 @@ try {
     $start.ArgumentList.Add('new')
     $start.Environment['TMUX_WORKFLOW_SERVER'] = $SshCommand
     $start.Environment['TMUX_WORKFLOW_REPORT'] = $report
+    if ($AiBaseUrl) { $start.Environment['TMUX_WORKFLOW_AI_URL'] = $AiBaseUrl }
     $process = [Diagnostics.Process]::Start($start)
     if (-not $process.WaitForExit(60000)) {
-        $process.Kill()
-        if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
-        throw 'Workspace workflow timed out.'
+        if (-not $process.WaitForExit(60000)) {
+            $process.Kill()
+            if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
+            throw 'Workspace workflow timed out.'
+        }
     }
     if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
     if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report) -or

@@ -1,4 +1,27 @@
-# Tmux Workspace 0.4.2
+# Tmux Workspace 0.5.0
+
+0.5.0 在侧栏底部加入 tmux 快捷操作和可配置 API 的 AI 翻译。
+侧栏交界线改为独立绘制的不透明主题色，背景不透明度不再影响它。
+
+## 快捷操作与翻译
+
+打开会话后，侧栏下方可左右／上下分屏、循环切换窗格焦点、放大或还原窗格。
+“更多操作”提供新建 tmux 窗口、前后切换窗口、更换分屏布局和查看滚动历史。
+这些操作在远端 tmux 中执行；不依赖 Ctrl+B 等前缀键配置。侧栏折叠后仍可从快捷操作图标使用。
+
+点击“AI 翻译”，填写原文和目标语言，在“API 设置”中填写 OpenAI 兼容服务的地址、
+模型 ID 和 API Key。地址可为 `https://example.com/v1` 或完整的 `/chat/completions` 地址；
+本机无认证服务可使用 `http://localhost:端口/v1` 并留空密钥。
+点击“翻译并输入”或 Ctrl+Enter，译文填入打开面板时的终端，再按 Enter 发送。
+多行译文合并成一行；控制字符会被拒绝。取消或请求失败时保留原文，允许继续编辑或重试。
+
+只有面板中的原文和目标语言会作为翻译内容发送到你配置的 API，应用不采集终端缓冲区。
+设置存放在应用配置目录的 `tmux-ai.json`；API Key 用 Windows DPAPI 当前用户保护。
+这个文件与 SSH 配置、运行设置一样，不包含在公开下载中。需要清除密钥时，在 API 设置中
+清空密钥并再次翻译以保存；也可在退出应用后删除本机 `tmux-ai.json`。
+
+参考：[Chat Completions 接口](https://developers.openai.com/api/reference/resources/chat)、
+[Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)。
 
 0.4.2 移除会话侧栏右侧额外的卡片边框，使透明背景覆盖到侧栏与终端的交界处。
 
@@ -119,10 +142,12 @@ Visual Studio C++ 桌面和 UWP/MSIX 构建组件。
 
     pwsh -File tools/Build-TmuxWorkspace.ps1 -OutputDirectory C:/path/to/portable
     pwsh -File tools/Build-TmuxMsix.ps1 -OutputDirectory C:/path/to/installer -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
-    pwsh -File tools/Test-TmuxWorkspace.ps1 -WithSshFixture -WithXaml
+    pwsh -File tools/Test-TmuxWorkspace.ps1 -WithSshFixture -WithXaml -WithAiFixture
 
 可选 SSH 测试需要 Python、Paramiko，使用临时密钥和独立配置，
 只监听 127.0.0.1，不修改用户 SSH 文件。
+AI 测试使用本机 HTTP 模拟服务、合成文本和假密钥，验证实际生产 HTTP 客户端、错误响应、
+控制字符处理、取消和 DPAPI 加密读写；不会调用付费模型服务。
 
 之前的模块检查没有覆盖实际窗口中的完整操作，不能据此判断程序可用。
 已在独立便携测试窗口中连接测试 SSH 配置及真实 Linux tmux 3.6，

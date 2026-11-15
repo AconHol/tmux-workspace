@@ -14,6 +14,8 @@ Choose a server, then open its tmux sessions from a permanent, collapsible sideb
 - A session has one app tab across all windows. Clicking it elsewhere activates the original window and tab, including a minimized window.
 - Drag a tab into a new window without losing the SSH connection or terminal buffer.
 - Collapse the native sidebar to a compact icon rail. Theme, font, color scheme, background opacity, acrylic and image customization are available.
+- Sidebar shortcuts control real tmux splits, pane focus, zoom, windows, layouts and history, including from the compact rail.
+- Translate your own text with a configurable OpenAI-compatible API and insert it into the original terminal. Choose the target language, endpoint and model; the API key is encrypted with Windows DPAPI. Press Enter yourself to submit the inserted text.
 - If tmux is missing, the app offers an explicit install action in an interactive SSH terminal.
 - No fixed five-second polling. Refresh manually or after relevant workspace operations.
 - Editable forms stay in the main XAML Island with native WinUI controls. UWP ContentDialog text input is unsupported in that host, so the app does not use its popup surface for editable forms.
@@ -27,7 +29,7 @@ Choose a server, then open its tmux sessions from a permanent, collapsible sideb
 3. 从侧栏选择或新建会话。点击已经打开的会话会跳转到原窗口；关闭标签页只断开 SSH，服务器上的任务继续运行。
 4. MSIX 安装包使用本地开发者证书签名，不是微软商店或公共受信证书。该证书已受你信任的设备可安装；在其他设备上请先核验发布者和公钥证书。不要忽略签名警告。
 
-应用不保存密码、不复制私钥、不读取其他 SSH 软件的密码库，也不会自动接受未知主机密钥。运行配置不包含在发布包中。
+应用不保存 SSH 密码、不复制私钥、不读取其他 SSH 软件的密码库，也不会自动接受未知主机密钥。翻译只发送你在面板中填写的原文，API Key 使用 Windows 当前用户加密保存。运行配置不包含在发布包中。
 
 ## Build from source
 

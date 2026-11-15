@@ -3,6 +3,7 @@
 // the installed release. Runs the real page, SSH transport and TermControl.
 #include <fstream>
 #include <functional>
+#include <sstream>
 
 // The production PCH uses WINRT_LEAN_AND_MEAN, which omits producer
 // implementations for platform event-argument interfaces.
@@ -86,6 +87,11 @@ namespace TerminalAppLocalTests
             require(std::abs(origin.X - paneWidth) < 0.01 &&
                     std::abs(origin.X + content.ActualWidth() - workspace.ActualWidth()) < 0.01,
                     "The terminal must directly adjoin the visible sidebar without a layout gap");
+            const auto edge = page->TmuxSidebarDivider();
+            const auto brush = edge.Background().as<winrt::Windows::UI::Xaml::Media::SolidColorBrush>();
+            require(brush.Color().A == 255 && brush.Opacity() == 1.0 && edge.Opacity() == 1.0 &&
+                    std::abs(edge.TransformToVisual(workspace).TransformPoint({ 0, 0 }).X - paneWidth) < 0.01 &&
+                    edge.ActualHeight() == workspace.ActualHeight(), "Sidebar edge is translucent or does not cover the visible join");
         }
         static winrt::Windows::UI::Xaml::Controls::ItemClickEventArgs clickArgs(winrt::Windows::Foundation::IInspectable item)
         {
@@ -176,6 +182,39 @@ namespace TerminalAppLocalTests
             catch (...) { *failure = "Native Enter submission failed"; }
             if (!failure->empty() && page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
         }
+        static winrt::Windows::Foundation::IAsyncAction ProbeTranslation(winrt::com_ptr<Page> page, std::wstring endpoint, bool cancel, std::shared_ptr<std::string> failure)
+        {
+            try
+            {
+                page->TmuxTranslationEndpoint().Text(endpoint);
+                page->TmuxTranslationModel().Text(L"fixture-model");
+                page->TmuxTranslationKey().Password(L"local-test-token");
+                page->TmuxTranslationLanguage().Text(L"英语");
+                page->TmuxTranslationText().Text(L"");
+                page->TmuxTranslationText().Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                co_await pause(page->Dispatcher());
+                const auto input = GetFocus();
+                for (const auto ch : std::wstring_view{ L"请帮我检查这个路径 /tmp/example" }) { PostMessageW(input, WM_CHAR, ch, 1); }
+                co_await pause(page->Dispatcher());
+                require(page->TmuxInputPrimary().IsEnabled(), "Native translation input did not enable its submit button");
+                page->_TmuxTranslateSubmit();
+                if (cancel) { page->_tmuxDismissInput(); co_return; }
+                for (unsigned i = 0; page->_tmuxTranslationBusy && i < 100; ++i) { co_await pause(page->Dispatcher()); }
+                require(!page->_tmuxTranslationBusy, "Translation never completed");
+                if (endpoint.find(L"unauthorized") != std::wstring::npos)
+                {
+                    require(page->TmuxInputLayer().Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible &&
+                            std::wstring_view(page->TmuxTranslationStatus().Text()).find(L"401") != std::wstring_view::npos &&
+                            !page->TmuxTranslationText().Text().empty() && page->TmuxInputPrimary().IsEnabled(),
+                            "API authentication failure did not preserve editable source text and offer retry");
+                    page->_tmuxDismissInput();
+                }
+                else { require(page->TmuxInputLayer().Visibility() == winrt::Windows::UI::Xaml::Visibility::Collapsed, "Successful translation did not return to the terminal"); }
+            }
+            catch (const std::exception& error) { *failure = error.what(); }
+            catch (...) { *failure = "Live translation panel failed"; }
+            if (!failure->empty() && page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
+        }
     public:
         static void Start(winrt::com_ptr<Page> page)
         {
@@ -244,6 +283,7 @@ namespace TerminalAppLocalTests
                 require(page->_tabs.Size() == 1, "First session did not create a terminal tab");
                 page->_FocusCurrentTab(false);
                 require(page->_GetActiveControl().ConnectionState() == winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected, "SSH terminal disconnected");
+                require(page->TmuxTools().IsEnabled() && page->TmuxRailTools().IsEnabled() && page->TmuxRailTranslate().IsEnabled(), "Connected session did not enable the visible shortcut entry points");
                 note("FOCUS: original crashing focus path completed in the real terminal tab");
                 page->_TmuxOpenSession(first);
                 require(page->_tabs.Size() == 1, "Repeated session selection duplicated the tab");
@@ -337,6 +377,70 @@ namespace TerminalAppLocalTests
                 require(rendered, "Actual terminal did not display the output of the remote tmux shell");
                 note("CREATE: queued native text and Enter created a real tmux shell and its output reached TermControl");
 
+                wchar_t aiBaseUrl[4096]{};
+                if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_AI_URL", aiBaseUrl, ARRAYSIZE(aiBaseUrl)))
+                {
+                    for (const auto suffix : { L"/unauthorized", L"/slow", L"/v1" })
+                    {
+                        inputFailure->clear();
+                        const auto endpoint = std::wstring{ aiBaseUrl } + suffix;
+                        liveDialog->opened = [page, endpoint, inputFailure](ContentDialog) { ProbeTranslation(page, endpoint, endpoint.ends_with(L"/slow"), inputFailure); };
+                        page->DialogPresenter(liveDialog.as<winrt::TerminalApp::IDialogPresenter>());
+                        page->_TmuxTranslateClicked(nullptr, nullptr);
+                        for (unsigned i = 0; page->_tmuxDialogOpen && i < 100; ++i) { co_await pause(dispatcher); }
+                        require(inputFailure->empty() && !page->_tmuxDialogOpen, inputFailure->empty() ? "Translation panel did not close" : inputFailure->c_str());
+                        require(page->_GetActiveControl().FocusState() != FocusState::Unfocused, "Closing translation did not return keyboard focus to the terminal");
+                        if (endpoint.ends_with(L"/slow")) { for (unsigned i = 0; i < 8; ++i) { co_await pause(dispatcher); } }
+                    }
+                    for (unsigned i = 0; i < 10; ++i) { co_await pause(dispatcher); }
+                    const auto text = std::wstring(page->_GetActiveControl().ReadEntireBuffer());
+                    require(text.find(L"CODEX_TRANSLATION_MARKER") != std::wstring::npos && text.find(L"CANCEL_SHOULD_NOT_INSERT") == std::wstring::npos,
+                            "Translation did not reach its terminal, or a cancelled result was injected");
+                    note("AI: native form input called the configured local API; 401 preserved editable text, cancel suppressed input, success filled the original real SSH terminal");
+                }
+
+                // All shortcuts act only on our own temporary remote session.
+                // Observe tmux's state after the actual page event handler runs.
+                std::string originalWindow, originalPane, lastPane;
+                bool expectedZoom{};
+                const auto query = "tmux display-message -p -t " + ::TmuxWorkspace::quoteShell(ownedSession->id) + " '#{window_id}|#{pane_id}|#{window_panes}|#{window_zoomed_flag}|#{pane_in_mode}'";
+                co_await resume_background();
+                const auto initialState = ::TmuxWorkspace::runSsh(*server, query, std::make_shared<std::atomic_bool>(false));
+                co_await resume_foreground(dispatcher);
+                { std::istringstream state{ initialState.output }; std::getline(state, originalWindow, '|'); std::getline(state, originalPane, '|'); lastPane = originalPane; }
+                for (const auto action : { L"split-horizontal", L"split-vertical", L"next-pane", L"zoom-pane", L"zoom-pane", L"next-layout", L"new-window", L"previous-window", L"next-window", L"copy-mode" })
+                {
+                    Button trigger;
+                    trigger.Tag(box_value(action));
+                    page->_TmuxActionClicked(trigger, nullptr);
+                    for (unsigned i = 0; page->_tmuxActionBusy && i < 80; ++i) { co_await pause(dispatcher); }
+                    require(!page->_tmuxActionBusy && page->TmuxStatus().Text() == L"已完成 tmux 操作", "Sidebar shortcut failed against real tmux");
+                    co_await resume_background();
+                    const auto current = ::TmuxWorkspace::runSsh(*server, query, std::make_shared<std::atomic_bool>(false));
+                    co_await resume_foreground(dispatcher);
+                    std::istringstream state{ current.output };
+                    std::string window, pane, panes, zoomed, inMode;
+                    std::getline(state, window, '|'); std::getline(state, pane, '|'); std::getline(state, panes, '|'); std::getline(state, zoomed, '|'); std::getline(state, inMode);
+                    if (std::wstring_view{ action } == L"split-horizontal") { require(panes == "2", "Horizontal split did not create a remote pane"); }
+                    if (std::wstring_view{ action } == L"split-vertical") { require(panes == "3", "Vertical split did not create a remote pane"); }
+                    if (std::wstring_view{ action } == L"next-pane") { require(pane != lastPane, "Pane focus did not change"); }
+                    if (std::wstring_view{ action } == L"zoom-pane") { expectedZoom = !expectedZoom; require(zoomed == (expectedZoom ? "1" : "0"), "Zoom shortcut did not toggle the remote pane zoom state"); }
+                    if (std::wstring_view{ action } == L"new-window" || std::wstring_view{ action } == L"next-window") { require(window != originalWindow, "Window shortcut did not switch the remote window"); }
+                    if (std::wstring_view{ action } == L"previous-window") { require(window == originalWindow, "Previous window shortcut selected the wrong window"); }
+                    if (std::wstring_view{ action } == L"copy-mode") { require(inMode.starts_with("1"), "History shortcut did not enter tmux copy mode"); }
+                    lastPane = pane;
+                }
+                // These shortcut tests changed the visible tmux window/pane.
+                // Restore the original pane and refresh its known marker before
+                // the independent reconnect/tear-out buffer-preservation checks.
+                const auto restorePane = "tmux send-keys -X -t " + ::TmuxWorkspace::quoteShell(ownedSession->id) + " cancel; tmux select-window -t " + ::TmuxWorkspace::quoteShell(originalWindow) + "; tmux select-pane -t " + ::TmuxWorkspace::quoteShell(originalPane) + "; tmux send-keys -t " + ::TmuxWorkspace::quoteShell(originalPane) + " C-u; " + markerCommand;
+                co_await resume_background();
+                const auto restored = ::TmuxWorkspace::runSsh(*server, restorePane, std::make_shared<std::atomic_bool>(false));
+                co_await resume_foreground(dispatcher);
+                require(restored.exitCode == 0, "Cannot restore the original temporary test pane");
+                for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
+                note("TOOLS: sidebar handlers split real tmux panes, changed focus, toggled zoom, switched layouts/windows and entered history mode");
+
                 dialogs->prepare = [&](ContentDialog dialog) {
                     require(dialog == page->TmuxPersonalizationDialog(), "Unexpected personalization dialog");
                     page->TmuxAcrylic().IsOn(false);
@@ -350,6 +454,7 @@ namespace TerminalAppLocalTests
                 require(opacity > 0.59f && opacity < 0.61f, "Personalization did not reach the running SSH terminal");
                 const auto sideOpacity = page->TmuxSidebar().Background().as<Media::SolidColorBrush>().Opacity();
                 require(sideOpacity > 0.59 && sideOpacity < 0.61, "Sidebar opacity did not update");
+                VerifySidebarJoin(page);
                 note("APPEARANCE: saved opacity reached the running terminal and sidebar");
 
                 page->_TmuxOpenSession(first);
@@ -364,6 +469,7 @@ namespace TerminalAppLocalTests
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
                 page->_FocusCurrentTab(false);
                 require(page->_tabs.Size() == 2, "Reopening the detached session failed");
+                require(std::wstring_view(page->_GetActiveControl().ReadEntireBuffer()).find(L"CODEX_WORKFLOW_OK") != std::wstring_view::npos, "Restored temporary tmux pane did not show the marker before tear-out");
 
                 const auto movedId = page->_GetActiveControl().ContentId();
                 page->_stashed.draggedTab = page->_GetFocusedTabImpl();

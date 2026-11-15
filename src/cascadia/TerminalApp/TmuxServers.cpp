@@ -90,16 +90,27 @@ namespace winrt::TerminalApp::implementation
         const auto fit = [this]() { TmuxInputCard().MaxHeight(std::max(160.0, Root().ActualHeight() - 48.0)); };
         fit();
         auto resize = Root().SizeChanged(auto_revoke, [fit](auto&&, auto&&) { fit(); });
-        auto accept = TmuxInputPrimary().Click(auto_revoke, [&](auto&&, auto&&) { if (dialog.IsPrimaryButtonEnabled()) { finish(ContentDialogResult::Primary); } });
+        const auto submit = [&]() {
+            if (!dialog.IsPrimaryButtonEnabled()) { return; }
+            if (dialog.Name() == L"TmuxTranslationDialog") { _TmuxTranslateSubmit(); }
+            else { finish(ContentDialogResult::Primary); }
+        };
+        auto accept = TmuxInputPrimary().Click(auto_revoke, [&](auto&&, auto&&) { submit(); });
         auto cancel = TmuxInputClose().Click(auto_revoke, [&](auto&&, auto&&) { finish(ContentDialogResult::None); });
         auto keyboard = TmuxInputLayer().KeyDown(auto_revoke, [&](auto&&, const Input::KeyRoutedEventArgs& event) {
             if (event.Key() == Windows::System::VirtualKey::Escape) { finish(ContentDialogResult::None); event.Handled(true); }
-            else if (event.Key() == Windows::System::VirtualKey::Enter && dialog.IsPrimaryButtonEnabled()) { finish(ContentDialogResult::Primary); event.Handled(true); }
+            else if (event.Key() == Windows::System::VirtualKey::Enter && dialog.IsPrimaryButtonEnabled() &&
+                     (dialog.Name() != L"TmuxTranslationDialog" || (GetKeyState(VK_CONTROL) & 0x8000))) { submit(); event.Handled(true); }
+        });
+        auto translationKeyboard = TmuxInputLayer().PreviewKeyDown(auto_revoke, [&](auto&&, const Input::KeyRoutedEventArgs& event) {
+            if (dialog.Name() == L"TmuxTranslationDialog" && event.Key() == Windows::System::VirtualKey::Enter && (GetKeyState(VK_CONTROL) & 0x8000))
+            { submit(); event.Handled(true); }
         });
         TmuxInputLayer().Visibility(Visibility::Visible);
         co_await resume_foreground(dispatcher, Windows::UI::Core::CoreDispatcherPriority::Low);
         if (dialog.Name() == L"TmuxNewSessionDialog") { TmuxNewSessionName().Focus(FocusState::Programmatic); }
         else if (dialog.Name() == L"TmuxAddServerDialog") { TmuxSshCommand().Focus(FocusState::Programmatic); }
+        else if (dialog.Name() == L"TmuxTranslationDialog") { TmuxTranslationText().Focus(FocusState::Programmatic); }
         else { TmuxTheme().Focus(FocusState::Programmatic); }
         co_await resume_on_signal(completed.get());
         co_await resume_foreground(dispatcher);
