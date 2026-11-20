@@ -63,7 +63,9 @@ try {
     if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report) -or
         -not (Select-String -LiteralPath $report -SimpleMatch 'PASS: real workspace workflow completed' -Quiet) -or
         -not (Select-String -LiteralPath $report -SimpleMatch 'PIXELS: opaque join rendered without uncovered pixels' -Quiet) -or
-        ($TouchInput -and -not (Select-String -LiteralPath $report -SimpleMatch 'TOUCH: Windows touch gestures passed' -Quiet))) {
+        ($TouchInput -and (
+            -not (Select-String -LiteralPath $report -SimpleMatch 'TOUCH: Windows touch gestures passed' -Quiet) -or
+            -not (Select-String -LiteralPath $report -SimpleMatch 'COPY: long press and drag selected terminal output' -Quiet)))) {
         throw "Workspace workflow failed with exit code $($process.ExitCode)."
     }
 }

@@ -1965,6 +1965,47 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         e.Handled(true);
     }
 
+    void TermControl::_TouchHoldingHandler(const IInspectable&, const HoldingRoutedEventArgs& args)
+    {
+        if (!_touchPointerId || _IsClosing() ||
+            args.PointerDeviceType() != Windows::Devices::Input::PointerDeviceType::Touch ||
+            args.HoldingState() != Windows::UI::Input::HoldingState::Started)
+        {
+            return;
+        }
+
+        const auto panel = SwapChainPanel();
+        const auto position = args.GetPosition(panel);
+        if (position.X < 0 || position.Y < 0 ||
+            position.X >= panel.ActualWidth() || position.Y >= panel.ActualHeight())
+        {
+            return;
+        }
+
+        const auto font = _core.FontSizeInDips();
+        if (font.Width <= 0 || font.Height <= 0)
+        {
+            return;
+        }
+
+        // Reuse word selection without sending a mouse report to the shell.
+        const til::point cell{ static_cast<int>(position.X / font.Width), static_cast<int>(position.Y / font.Height) };
+        bool selectionNeedsCopy{};
+        get_self<ControlCore>(_core)->LeftClickOnTerminal(cell, 2, false, false, false, selectionNeedsCopy);
+        _touchSelecting = _core.HasSelection();
+        args.Handled(true);
+    }
+
+    void TermControl::_TouchCaptureLostHandler(const IInspectable&, const PointerRoutedEventArgs& args)
+    {
+        if (!_IsClosing() && _touchPointerId == args.Pointer().PointerId())
+        {
+            _touchPointerId.reset();
+            _touchSelecting = false;
+            _interactivity.TouchReleased();
+        }
+    }
+
     // Method Description:
     // - handle a mouse click event. Begin selection process.
     // Arguments:
@@ -2010,8 +2051,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         {
             // NB: I don't think this is correct because the touch should be in the center of the rect.
             //     I suspect the point.Position() would be correct.
-            const auto contactRect = point.Properties().ContactRect();
-            _interactivity.TouchPressed({ contactRect.X, contactRect.Y });
+            if (!_touchPointerId)
+            {
+                _touchPointerId = ptr.PointerId();
+                const auto contactRect = point.Properties().ContactRect();
+                _interactivity.TouchPressed({ contactRect.X, contactRect.Y });
+            }
         }
         else
         {
@@ -2096,10 +2141,17 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 }
             }
         }
-        else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
+        else if (type == Windows::Devices::Input::PointerDeviceType::Touch && _touchPointerId == ptr.PointerId())
         {
-            const auto contactRect = point.Properties().ContactRect();
-            _interactivity.TouchMoved({ contactRect.X, contactRect.Y }, _focused);
+            if (_touchSelecting)
+            {
+                _interactivity.SetEndSelectionPoint(pixelPosition);
+            }
+            else
+            {
+                const auto contactRect = point.Properties().ContactRect();
+                _interactivity.TouchMoved({ contactRect.X, contactRect.Y }, _focused);
+            }
         }
 
         args.Handled(true);
@@ -2127,6 +2179,14 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         const auto pixelPosition = _toTerminalOrigin(cursorPosition);
         const auto type = ptr.PointerDeviceType();
 
+        const bool releasedTouch = type == Windows::Devices::Input::PointerDeviceType::Touch && _touchPointerId == ptr.PointerId();
+        const bool showCopy = releasedTouch && _touchSelecting && _core.HasSelection();
+        if (releasedTouch)
+        {
+            _touchPointerId.reset();
+            _touchSelecting = false;
+            _interactivity.TouchReleased();
+        }
         _ReleasePointerCapture(sender, args);
 
         if (type == Windows::Devices::Input::PointerDeviceType::Mouse ||
@@ -2137,14 +2197,17 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                            ControlKeyStates(args.KeyModifiers()),
                                            pixelPosition);
         }
-        else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
-        {
-            _interactivity.TouchReleased();
-        }
-
         _TryStopAutoScroll(ptr.PointerId());
 
         args.Handled(true);
+        if (showCopy)
+        {
+            TouchCopyItem().Text(CopyCommandButton().Label());
+            Controls::Primitives::FlyoutShowOptions options;
+            options.Position(cursorPosition);
+            options.Placement(Controls::Primitives::FlyoutPlacementMode::Top);
+            TouchCopyMenu().ShowAt(*this, options);
+        }
     }
 
     // Method Description:

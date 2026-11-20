@@ -33,6 +33,12 @@
              mc:Ignorable="d">
     <UserControl.Resources>
 
+        <MenuFlyout x:Name="TouchCopyMenu">
+            <MenuFlyoutItem x:Name="TouchCopyItem" Click="_CopyCommandHandler">
+                <MenuFlyoutItem.Icon><SymbolIcon Symbol="Copy" /></MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+        </MenuFlyout>
+
         <mux:CommandBarFlyout x:Name="ContextMenu">
             <AppBarButton x:Name="PasteCommandButton"
                           x:Uid="PasteCommandButton"
@@ -1259,6 +1265,9 @@
 
             <Grid Grid.Column="0"
                   Background="Transparent"
+                  Holding="_TouchHoldingHandler"
+                  PointerCanceled="_TouchCaptureLostHandler"
+                  PointerCaptureLost="_TouchCaptureLostHandler"
                   PointerExited="_PointerExitedHandler"
                   PointerMoved="_PointerMovedHandler"
                   PointerPressed="_PointerPressedHandler"

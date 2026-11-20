@@ -3542,6 +3542,14 @@ namespace winrt::TerminalApp::implementation
 
     safe_void_coroutine TerminalPage::_copyToClipboard(const IInspectable, const WriteToClipboardEventArgs args) const
     {
+#ifdef TMUX_WORKFLOW_TESTS
+        // Touch workflow listens to the terminal's clipboard event in-process.
+        // Keep the user's system clipboard intact while exercising Copy.
+        if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_TOUCH_INPUT", nullptr, 0))
+        {
+            co_return;
+        }
+#endif
         // This is our hook into SetCopyToClipboardCallback, which gets called by the VT parser thread.
         // When this gets called, the console lock is being held. This is not a problem per-se, but there
         // is just a teeny tiny problem... EmptyClipboard() sends WM_DESTROYCLIPBOARD to the previous owner.

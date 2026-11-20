@@ -5,6 +5,7 @@
 #include <functional>
 #include <sstream>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.Xaml.Automation.Provider.h>
 
 // The production PCH uses WINRT_LEAN_AND_MEAN, which omits producer
 // implementations for platform event-argument interfaces.
@@ -340,7 +341,8 @@ namespace TerminalAppLocalTests
             co_await pause(page->Dispatcher());
         }
 
-        static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false)
+        static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false,
+                                                                   std::optional<int> holdToColumn = std::nullopt)
         {
             using namespace winrt;
             const auto control = page->_GetActiveControl();
@@ -379,6 +381,18 @@ namespace TerminalAppLocalTests
                 }
             };
             inject(POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_DOWN);
+            if (holdToColumn)
+            {
+                // Leave the contact stationary long enough for XAML's hold
+                // recognizer, keeping the synthetic contact alive meanwhile.
+                for (int i = 0; i < 7; ++i)
+                {
+                    co_await resume_after(std::chrono::milliseconds{ 125 });
+                    co_await resume_foreground(page->Dispatcher());
+                    inject(POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_UPDATE);
+                }
+                location.x += static_cast<LONG>(std::lround((*holdToColumn - column) * font.Width * scale));
+            }
             co_await resume_after(std::chrono::milliseconds{ 50 });
             co_await resume_foreground(page->Dispatcher());
             if (swipe)
@@ -391,6 +405,41 @@ namespace TerminalAppLocalTests
             inject(POINTER_FLAG_UP);
             co_await pause(page->Dispatcher());
             co_await WaitMouseFocus(page);
+        }
+
+        static winrt::Windows::Foundation::IAsyncAction ProbeTouchCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, std::string pane, int left, int top)
+        {
+            using namespace winrt;
+            using namespace winrt::Windows::UI::Xaml;
+            const auto control = page->_GetActiveControl();
+            const auto target = ::TmuxWorkspace::quoteShell(pane);
+            const auto command = ::TmuxWorkspace::quoteShell("printf '\\033[2J\\033[2;1Htapcopy second\\n'");
+            co_await MouseRemote(server, "tmux send-keys -t " + target + " -l -- " + command + "; tmux send-keys -t " + target + " Enter");
+            for (int i = 0; i < 3; ++i) { co_await pause(page->Dispatcher()); }
+            hstring copied;
+            const auto copyEvent = control.WriteToClipboard(auto_revoke, [&](const auto&, const auto& args) { copied = args.Plain(); });
+            co_await TouchGesture(page, left + 1, top + 1, false, left + 10);
+            if (!control.HasSelection()) { throw hresult_error(E_FAIL, L"Touch hold and drag did not select text"); }
+            FrameworkElement item{ nullptr };
+            for (const auto& popup : Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(control.XamlRoot()))
+            {
+                if (const auto child = popup.Child())
+                {
+                    item = FindVisual(child, L"TouchCopyItem");
+                    if (item) { break; }
+                }
+            }
+            if (!item) { throw hresult_error(E_FAIL, L"Touch selection did not present the Copy command"); }
+            using namespace Automation::Peers;
+            const auto peer = FrameworkElementAutomationPeer::CreatePeerForElement(item);
+            peer.GetPattern(PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            co_await pause(page->Dispatcher());
+            if (copied != L"tapcopy second") { throw hresult_error(E_FAIL, hstring{ L"Touch Copy returned unexpected text: " + std::wstring{ copied } }); }
+            if (!to_string(co_await MouseRemote(server, "tmux display-message -p -t " + target + " '#{pane_active}'")).starts_with("1"))
+            {
+                throw hresult_error(E_FAIL, L"Touch copy changed the active pane");
+            }
+            get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core().ClearSelection();
         }
 
         static winrt::Windows::Foundation::IAsyncAction ProbeMouseModes(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, ::TmuxWorkspace::Session session)
@@ -438,6 +487,7 @@ namespace TerminalAppLocalTests
                 co_await TouchGesture(page, column(a), row(a));
                 if (!to_string(co_await MouseRemote(server, active)).starts_with(a.id + "\n"))
                 { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane in native mode"); }
+                co_await ProbeTouchCopy(page, server, a.id, a.left, a.top);
             }
 
             co_await SetMouseMode(page, Mode::Compatibility);
@@ -755,6 +805,7 @@ namespace TerminalAppLocalTests
                 if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_TOUCH_INPUT", nullptr, 0))
                 {
                     note("TOUCH: Windows touch gestures passed in Native, Compatibility and Off; swiping did not switch pane");
+                    note("COPY: long press and drag selected terminal output; the visible Copy action produced the exact text");
                 }
                 co_await MouseRemote(*server, restorePane);
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }

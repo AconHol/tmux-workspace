@@ -310,6 +310,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         SafeDispatcherTimer _autoScrollTimer;
         std::optional<std::chrono::high_resolution_clock::time_point> _lastAutoScrollUpdateTime;
         bool _pointerPressedInBounds{ false };
+        std::optional<uint32_t> _touchPointerId;
+        bool _touchSelecting{ false };
 
         winrt::Windows::UI::Composition::ScalarKeyFrameAnimation _bellLightAnimation{ nullptr };
         winrt::Windows::UI::Composition::ScalarKeyFrameAnimation _bellDarkAnimation{ nullptr };
@@ -365,6 +367,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         bool _InitializeTerminal(const InitializeReason reason);
         safe_void_coroutine _restoreInBackground();
         void _TappedHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::TappedRoutedEventArgs& e);
+        void _TouchHoldingHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::HoldingRoutedEventArgs& e);
+        void _TouchCaptureLostHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& e);
         void _KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
         void _KeyUpHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
         void _CharacterHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::CharacterReceivedRoutedEventArgs& e);
