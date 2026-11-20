@@ -294,6 +294,7 @@ namespace winrt::TerminalApp::implementation
         // Upon settings update we reload the system settings for scrolling as well.
         // TODO: consider reloading this value periodically.
         _systemRowsToScroll = _ReadSystemRowsToScroll();
+        if (_tmuxWorkspaceEnabled && _tmuxMouseSettingsReady) { _TmuxReloadMouseMode(); }
     }
 
     bool TerminalPage::IsRunningElevated() const noexcept
@@ -1639,6 +1640,11 @@ namespace winrt::TerminalApp::implementation
             if (const auto& conpty{ connection.try_as<TerminalConnection::ConptyConnection>() })
             {
                 controlSettings.DefaultSettings()->Commandline(conpty.Commandline());
+            }
+            if (_tmuxWorkspaceEnabled)
+            {
+                if (const auto context = get_self<ContentManager>(_manager)->GetTmuxContext(control.ContentId()); context && context->session)
+                { controlSettings.DefaultSettings()->Commandline(hstring{ _TmuxAttachCommandline(context->server, *context->session) }); }
             }
         }
 

@@ -15,6 +15,8 @@
 // by the standalone tests in src/cascadia/LocalTests_TmuxWorkspace.
 namespace TmuxWorkspace
 {
+    enum class MouseMode { Native, Compatibility, Off };
+    struct MouseFocusState;
     struct Server
     {
         std::wstring target;
@@ -213,14 +215,41 @@ namespace TmuxWorkspace
         throw std::invalid_argument("Unknown tmux action");
     }
 
-    inline std::string attachCommand(const Session& session)
+    inline std::string sessionGuard(const Session& session)
     {
-        // The leading '=' requests an exact match rather than tmux's prefix and
-        // glob matching. IDs survive renames; creation time detects ID reuse.
         return "if [ \"$(tmux display-message -p -t " + quoteShell("=" + session.id + ":") +
                " '#{pid}/#{session_id}/#{session_created}')\" != " + quoteShell(session.key()) +
-               " ]; then printf '%s\\n' 'Session changed or ended. Refresh the session list.' >&2; exit 1; fi; "
-               "exec tmux attach-session -t " + quoteShell("=" + session.id);
+               " ]; then printf '%s\\n' 'Session changed or ended. Refresh the session list.' >&2; exit 1; fi; ";
+    }
+
+    inline std::string mouseCommand(const Session& session, MouseMode mode)
+    {
+        return sessionGuard(session) + "tmux set-option -t " + quoteShell(session.id) +
+               " mouse " + (mode == MouseMode::Native ? "on" : "off");
+    }
+
+    inline std::string attachCommand(const Session& session, MouseMode mode = MouseMode::Native)
+    {
+        return mouseCommand(session, mode) + " || exit $?; exec tmux attach-session -t " + quoteShell("=" + session.id);
+    }
+
+    inline std::string focusPaneCommand(const Session& session, int column, int row)
+    {
+        if (column < 0 || row < 0 || column > 32766 || row > 32766) { throw std::invalid_argument("Invalid terminal cell"); }
+        const auto target = quoteShell(session.id);
+        return sessionGuard(session) + "x=" + std::to_string(column) + "; y=" + std::to_string(row) +
+            "; status=$(tmux show-options -Aqv -t " + target + " status) || exit 1; "
+            "case \"$status\" in off|0) lines=0;; on) lines=1;; [1-5]) lines=$status;; *) lines=1;; esac; "
+            "position=$(tmux show-options -Aqv -t " + target + " status-position) || exit 1; "
+            "if [ \"$position\" = top ]; then y=$((y-lines)); fi; "
+            "[ \"$y\" -ge 0 ] || exit 2; panes=$(tmux list-panes -t " + quoteShell(session.id + ":") +
+            " -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_zoomed_flag} #{pane_active} #{window_width} #{window_height}') || exit 1; printf '%s\\n' \"$panes\" | "
+            "{ while read -r pane left top width height zoom active ww wh; do "
+            "if [ \"$zoom\" = 1 ]; then "
+            "[ \"$active\" = 1 ] && [ \"$x\" -lt \"$ww\" ] && [ \"$y\" -lt \"$wh\" ] || continue; "
+            "else [ \"$x\" -ge \"$left\" ] && [ \"$x\" -lt $((left+width)) ] && "
+            "[ \"$y\" -ge \"$top\" ] && [ \"$y\" -lt $((top+height)) ] || continue; fi; "
+            "tmux select-pane -t \"$pane\" && printf '%s\\n' \"$pane\"; exit $?; done; exit 2; }";
     }
 
     inline bool isEmptyServerError(std::string_view error)

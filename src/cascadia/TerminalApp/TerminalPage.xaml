@@ -66,6 +66,12 @@
                     <Button x:Name="TmuxProblemAction" Click="_TmuxProblemActionClicked" Content="打开 SSH 终端" />
                 </mux:InfoBar.ActionButton>
             </mux:InfoBar>
+            <mux:InfoBar x:Name="TmuxMouseProblem" IsOpen="False" IsClosable="True" Severity="Warning"
+                         Message="窗格焦点切换失败，暂存输入尚未发送。可复制后自行恢复。">
+                <mux:InfoBar.ActionButton>
+                    <Button Content="复制暂存输入" Click="_TmuxCopyMouseInputClicked" />
+                </mux:InfoBar.ActionButton>
+            </mux:InfoBar>
         </StackPanel>
 
         <SplitView x:Name="TmuxWorkspaceView" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"
@@ -369,6 +375,13 @@
                                        SmallChange="1" SpinButtonPlacementMode="Compact" />
                     </Grid>
                     <ToggleSwitch x:Name="TmuxAcrylic" Header="背景半透明材质" OnContent="开" OffContent="关" />
+                    <ComboBox x:Name="TmuxMouseMode" Header="窗格鼠标模式" HorizontalAlignment="Stretch">
+                        <ComboBoxItem Content="原生：点击、拖动分隔线和滚动" Tag="native" />
+                        <ComboBoxItem Content="兼容：通过应用点击切换窗格" Tag="compatibility" />
+                        <ComboBoxItem Content="关闭自动鼠标切换" Tag="off" />
+                    </ComboBox>
+                    <TextBlock Text="兼容模式不依赖 tmux 鼠标功能，通过 SSH 定位窗格；点击后键入的内容会等待定位完成再发送。原生模式下，Shift+拖动可选择本地文本。"
+                               TextWrapping="Wrap" Style="{ThemeResource CaptionTextBlockStyle}" />
                     <StackPanel Spacing="4">
                         <TextBlock Text="背景不透明度" />
                         <Slider x:Name="TmuxOpacity" Minimum="20" Maximum="100" StepFrequency="1" TickFrequency="10"

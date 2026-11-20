@@ -1980,6 +1980,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         RestorePointerCursor.raise(*this, nullptr);
 
+        // Allow the host to prepare an external pane-focus operation before
+        // any mouse report or keyboard input reaches the current connection.
+        TerminalPointerPressed.raise(*this, args);
+        if (args.Handled()) { return; }
+
         _CapturePointer(sender, args);
 
         const auto ptr = args.Pointer();

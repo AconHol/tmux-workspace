@@ -431,6 +431,7 @@ namespace winrt::TerminalApp::implementation
         TmuxFontFace().Text(profile.FontInfo().FontFace());
         TmuxFontSize().Value(profile.FontInfo().FontSize());
         TmuxAcrylic().IsOn(appearance.UseAcrylic());
+        TmuxMouseMode().SelectedIndex(static_cast<int>(_tmuxMouseMode));
         TmuxOpacity().Value(appearance.Opacity() * 100.0);
         TmuxBackgroundImage().Text(appearance.BackgroundImagePath().Path());
         TmuxPersonalizationError().Text(L"");
@@ -462,6 +463,7 @@ namespace winrt::TerminalApp::implementation
                 targetAppearance.Opacity(static_cast<float>(TmuxOpacity().Value() / 100.0));
                 targetAppearance.BackgroundImagePath(MediaResourceHelper::FromString(TmuxBackgroundImage().Text()));
                 settings.ResolveMediaResources();
+                _TmuxSaveMouseMode(static_cast<::TmuxWorkspace::MouseMode>(std::clamp(TmuxMouseMode().SelectedIndex(), 0, 2)));
                 if (!settings.WriteSettingsToDisk()) { throw std::runtime_error("Settings could not be saved"); }
                 SetSettings(settings, true);
                 co_return;

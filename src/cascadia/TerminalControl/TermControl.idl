@@ -25,11 +25,17 @@ namespace Microsoft.Terminal.Control
         Shown
     };
 
+    interface ITerminalPointerHost
+    {
+        event Windows.Foundation.TypedEventHandler<Object, Windows.UI.Xaml.Input.PointerRoutedEventArgs> TerminalPointerPressed;
+    };
+
     [default_interface] runtimeclass TermControl : Windows.UI.Xaml.Controls.UserControl,
                                                    IDirectKeyListener,
                                                    IMouseWheelListener,
                                                    ICoreState,
-                                                   Windows.UI.Xaml.Data.INotifyPropertyChanged
+                                                   Windows.UI.Xaml.Data.INotifyPropertyChanged,
+                                                   ITerminalPointerHost
     {
         TermControl(ControlInteractivity content);
 

@@ -197,6 +197,7 @@
     <ClCompile Include="TmuxServers.cpp" />
     <ClCompile Include="TmuxAi.cpp" />
     <ClCompile Include="TmuxTools.cpp" />
+    <ClCompile Include="TmuxMouse.cpp" />
     <ClCompile Include="AppCommandlineArgs.cpp" />
     <ClCompile Include="Commandline.cpp" />
     <ClCompile Include="CommandPaletteItems.cpp" />

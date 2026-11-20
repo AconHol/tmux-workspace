@@ -484,9 +484,47 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - <none>
     void ControlCore::_sendInputToConnection(std::wstring_view wstr)
     {
+        {
+            const std::scoped_lock lock{ _inputBufferMutex };
+            if (_bufferingInput) { _bufferedInput.append(wstr); return; }
+        }
         if (_connection)
         {
             _connection.WriteInput(winrt_wstring_to_array_view(wstr));
+        }
+    }
+
+    void ControlCore::BeginInputBuffering()
+    {
+        const std::scoped_lock lock{ _inputBufferMutex };
+        _bufferingInput = true;
+    }
+
+    winrt::hstring ControlCore::EndInputBuffering(bool replay)
+    {
+        // Keep buffering during replay so concurrent input cannot overtake the
+        // queued keys. No connection write happens while holding our mutex.
+        for (;;)
+        {
+            std::wstring batch;
+            {
+                const std::scoped_lock lock{ _inputBufferMutex };
+                batch.swap(_bufferedInput);
+                if (!replay || batch.empty()) { _bufferingInput = false; return winrt::hstring{ batch }; }
+            }
+            try
+            {
+                if (!_connection) { throw std::runtime_error("Connection closed during input replay"); }
+                _connection.WriteInput(winrt_wstring_to_array_view(batch));
+            }
+            catch (...)
+            {
+                const std::scoped_lock lock{ _inputBufferMutex };
+                batch.append(_bufferedInput);
+                _bufferedInput.clear();
+                _bufferingInput = false;
+                return winrt::hstring{ batch };
+            }
         }
     }
 

@@ -310,6 +310,124 @@ namespace TerminalAppLocalTests
             catch (...) { *failure = "Live translation panel failed"; }
             if (!failure->empty() && page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
         }
+        static winrt::Windows::Foundation::IAsyncOperation<winrt::hstring> MouseRemote(::TmuxWorkspace::Server server, std::string command)
+        {
+            co_await winrt::resume_background();
+            const auto result = ::TmuxWorkspace::runSsh(server, command, std::make_shared<std::atomic_bool>(false));
+            require(result.exitCode == 0, "Mouse test remote command failed");
+            co_return winrt::to_hstring(result.output);
+        }
+
+        static winrt::Windows::Foundation::IAsyncAction SetMouseMode(winrt::com_ptr<Page> page, ::TmuxWorkspace::MouseMode mode)
+        {
+            const auto previous = page->_dialogPresenter.get();
+            auto restore = wil::scope_exit([&]() noexcept { page->DialogPresenter(previous); });
+            auto settings = winrt::make_self<WorkflowDialogs>();
+            settings->prepare = [page, mode](auto) { page->TmuxMouseMode().SelectedIndex(static_cast<int>(mode)); };
+            page->DialogPresenter(settings.as<winrt::TerminalApp::IDialogPresenter>());
+            page->_TmuxPersonalizationClicked(nullptr, nullptr);
+            for (unsigned i = 0; (page->_tmuxDialogOpen || page->_tmuxMouseApplying) && i < 150; ++i) { co_await pause(page->Dispatcher()); }
+            require(!page->_tmuxDialogOpen && !page->_tmuxMouseApplying && page->_tmuxMouseMode == mode, "Personalization did not save/apply the requested mouse mode");
+            page->_TmuxReloadMouseMode();
+            require(page->_tmuxMouseMode == mode, "Mouse preference did not persist");
+            for (unsigned i = 0; i < 3; ++i) { co_await pause(page->Dispatcher()); }
+        }
+
+        static winrt::Windows::Foundation::IAsyncAction WaitMouseFocus(winrt::com_ptr<Page> page)
+        {
+            for (unsigned i = 0; !page->_tmuxMouseFocusRequests.empty() && i < 150; ++i) { co_await pause(page->Dispatcher()); }
+            require(page->_tmuxMouseFocusRequests.empty(), "Compatibility focus/input buffering did not finish");
+            co_await pause(page->Dispatcher());
+        }
+
+        static winrt::Windows::Foundation::IAsyncAction ProbeMouseModes(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, ::TmuxWorkspace::Session session)
+        {
+            using namespace winrt;
+            using namespace winrt::Microsoft::Terminal::Control;
+            using Mode = ::TmuxWorkspace::MouseMode;
+            struct Pane { std::string id; int left, top, width, height, active; };
+            const auto target = ::TmuxWorkspace::quoteShell(session.id);
+            const auto list = "tmux list-panes -t " + target + " -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}'";
+            const auto active = "tmux display-message -p -t " + target + " '#{pane_id}'";
+            const auto mouse = "tmux show-options -Aqv -t " + target + " mouse";
+            const auto snapshot = to_string(co_await MouseRemote(server, list));
+            std::istringstream stream{ snapshot };
+            std::vector<Pane> panes;
+            Pane pane{};
+            while (stream >> pane.id >> pane.left >> pane.top >> pane.width >> pane.height >> pane.active) { panes.push_back(pane); }
+            require(panes.size() >= 2, "Mouse test requires real split panes");
+            const auto a = panes.front();
+            const auto b = panes.back();
+            const auto column = [](const Pane& value) { return value.left + value.width / 2; };
+            const auto row = [](const Pane& value) { return value.top + value.height / 2; };
+            auto control = page->_GetActiveControl();
+            const auto native = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId());
+            co_await MouseRemote(server, "tmux select-pane -t " + ::TmuxWorkspace::quoteShell(a.id));
+            require(to_string(co_await MouseRemote(server, mouse)).starts_with("on"), "Native attach did not enable session mouse support");
+            const auto font = native.Core().FontSize();
+            const winrt::Microsoft::Terminal::Core::Point point{ static_cast<int>((column(b) + 0.5f) * font.Width), static_cast<int>((row(b) + 0.5f) * font.Height) };
+            native.PointerPressed(MouseButtonState::IsLeftButtonDown, WM_LBUTTONDOWN, GetTickCount64() * 1000, {}, point);
+            native.PointerReleased(static_cast<MouseButtonState>(0), WM_LBUTTONUP, {}, point);
+            co_await pause(page->Dispatcher());
+            require(to_string(co_await MouseRemote(server, active)).starts_with(b.id + "\n"), "Native pointer pipeline did not select the clicked tmux pane");
+
+            co_await SetMouseMode(page, Mode::Compatibility);
+            require(to_string(co_await MouseRemote(server, mouse)).starts_with("off"), "Compatibility mode must work with tmux mouse disabled");
+            // Type immediately after two fast clicks. The first batch belongs
+            // to B and the second to A even while SSH selection is in flight.
+            page->_TmuxQueueMouseFocus(control, column(b), row(b));
+            control.SendInput(L"\x15printf 'MOUSE_BATCH_B_OK\\n'\r");
+            page->_TmuxQueueMouseFocus(control, column(a), row(a));
+            control.SendInput(L"\x15printf 'MOUSE_BATCH_A_OK\\n'\r");
+            co_await WaitMouseFocus(page);
+            require(!page->TmuxMouseProblem().IsOpen(), "Compatibility mouse focus unexpectedly failed");
+            const auto aText = to_string(co_await MouseRemote(server, "tmux capture-pane -p -t " + ::TmuxWorkspace::quoteShell(a.id)));
+            const auto bText = to_string(co_await MouseRemote(server, "tmux capture-pane -p -t " + ::TmuxWorkspace::quoteShell(b.id)));
+            require(aText.find("MOUSE_BATCH_A_OK") != std::string::npos && aText.find("MOUSE_BATCH_B_OK") == std::string::npos &&
+                    bText.find("MOUSE_BATCH_B_OK") != std::string::npos && bText.find("MOUSE_BATCH_A_OK") == std::string::npos,
+                    "Rapid clicks routed keyboard input into the wrong pane");
+
+            co_await MouseRemote(server, "tmux set-option -t " + target + " status-position top; tmux set-option -t " + target + " status 2");
+            std::istringstream topLayout{ to_string(co_await MouseRemote(server, list)) };
+            Pane topPane{};
+            topLayout >> topPane.id >> topPane.left >> topPane.top >> topPane.width >> topPane.height >> topPane.active;
+            page->_TmuxQueueMouseFocus(control, column(topPane), row(topPane) + 2);
+            co_await WaitMouseFocus(page);
+            require(to_string(co_await MouseRemote(server, active)).starts_with(topPane.id + "\n"), "Top multiline status bar offset selected the wrong pane");
+            co_await MouseRemote(server, "tmux resize-pane -Z -t " + ::TmuxWorkspace::quoteShell(topPane.id));
+            page->_TmuxQueueMouseFocus(control, 1, 3);
+            co_await WaitMouseFocus(page);
+            require(to_string(co_await MouseRemote(server, active)).starts_with(topPane.id + "\n"), "Zoomed view selected an invisible pane");
+            co_await MouseRemote(server, "tmux resize-pane -Z -t " + ::TmuxWorkspace::quoteShell(topPane.id) + "; tmux set-option -u -t " + target + " status; tmux set-option -u -t " + target + " status-position");
+
+            // Reject an expired context before changing any real tmux pane.
+            const auto manager = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
+            const auto context = *manager->GetTmuxContext(control.ContentId());
+            auto expired = context;
+            expired.session->created += "-expired";
+            manager->SetTmuxContext(control.ContentId(), expired);
+            page->_TmuxQueueMouseFocus(control, column(a), row(a));
+            control.SendInput(L"MOUSE_KEEP_UNSENT");
+            co_await WaitMouseFocus(page);
+            manager->SetTmuxContext(control.ContentId(), context);
+            require(page->TmuxMouseProblem().IsOpen() && page->_tmuxUnsentMouseInput.find(L"MOUSE_KEEP_UNSENT") != std::wstring::npos,
+                    "Failed focus lost pending input instead of preserving it for recovery");
+            require(to_string(co_await MouseRemote(server, "tmux capture-pane -p -t " + target)).find("MOUSE_KEEP_UNSENT") == std::string::npos,
+                    "Failed focus sent pending input to a pane");
+            page->_tmuxUnsentMouseInput.clear();
+            page->TmuxMouseProblem().IsOpen(false);
+
+            co_await SetMouseMode(page, Mode::Off);
+            page->_TmuxQueueMouseFocus(control, column(b), row(b));
+            require(page->_tmuxMouseFocusRequests.empty(), "Off mode initiated a compatibility focus request");
+            co_await SetMouseMode(page, Mode::Compatibility);
+            page->_RemoveTab(page->_GetFocusedTab());
+            page->_TmuxOpenSession(session);
+            for (unsigned i = 0; i < 15; ++i) { co_await pause(page->Dispatcher()); }
+            require(to_string(co_await MouseRemote(server, mouse)).starts_with("off"), "Reopened session ignored the saved compatibility mode");
+            co_await SetMouseMode(page, Mode::Native);
+            require(to_string(co_await MouseRemote(server, mouse)).starts_with("on"), "Switching back to native did not restore tmux mouse support");
+        }
     public:
         static void Start(winrt::com_ptr<Page> page)
         {
@@ -349,18 +467,18 @@ namespace TerminalAppLocalTests
                 const auto row = page->TmuxServerList().Items().GetAt(0).as<ListViewItem>();
                 page->_TmuxServerClicked(nullptr, clickArgs(row.Content()));
                 for (unsigned i = 0; page->_tmuxBusy && i < 100; ++i) { co_await pause(dispatcher); }
-                if (!page->_tmuxBusy && !page->TmuxProblem().IsOpen() && page->_tmuxSessions.empty())
+                if (!page->_tmuxBusy && !page->TmuxProblem().IsOpen())
                 {
                     const auto baselineName = "codex-check-base-" + std::to_string(GetTickCount64());
                     co_await resume_background();
                     const auto created = ::TmuxWorkspace::runSsh(*server, ::TmuxWorkspace::createCommand(baselineName), std::make_shared<std::atomic_bool>(false));
                     const auto sessions = created.exitCode == 0 ? ::TmuxWorkspace::parseSessions(created.output) : std::vector<::TmuxWorkspace::Session>{};
                     co_await resume_foreground(dispatcher);
-                    require(sessions.size() == 1, "Cannot create an isolated baseline on the empty tmux server");
+                    require(sessions.size() == 1, "Cannot create an isolated baseline tmux session");
                     baselineSession = sessions.front();
                     page->_TmuxRefresh(true);
                     for (unsigned i = 0; page->_tmuxBusy && i < 100; ++i) { co_await pause(dispatcher); }
-                    note("BASELINE: created a temporary session because the server initially had no sessions");
+                    note("BASELINE: created an isolated session so mouse options and input never modify an existing user session");
                 }
                 if (page->_tmuxBusy || page->TmuxProblem().IsOpen() || page->_tmuxSessions.empty())
                 {
@@ -372,8 +490,14 @@ namespace TerminalAppLocalTests
                 }
                 require(!page->_tmuxBusy && !page->TmuxProblem().IsOpen() && !page->_tmuxSessions.empty(), "Real SSH server did not return sessions");
                 note("CONNECT: real Linux tmux sessions rendered in the sidebar");
-                const auto first = page->_tmuxSessions.front();
-                page->_TmuxSessionClicked(nullptr, clickArgs(page->TmuxSessionList().Items().GetAt(0).as<ListViewItem>().Content()));
+                require(baselineSession.has_value(), "Isolated baseline session missing");
+                const auto first = *baselineSession;
+                for (const auto& item : page->TmuxSessionList().Items())
+                {
+                    const auto sessionRow = item.as<ListViewItem>();
+                    if (to_string(unbox_value_or<hstring>(::TmuxWorkspace::clickedRowTag(sessionRow.Content()), hstring{})) == first.key())
+                    { page->_TmuxSessionClicked(nullptr, clickArgs(sessionRow.Content())); break; }
+                }
                 for (unsigned i = 0; i < 15; ++i) { co_await pause(dispatcher); }
                 require(page->_tabs.Size() == 1, "First session did not create a terminal tab");
                 page->_FocusCurrentTab(false);
@@ -543,6 +667,10 @@ namespace TerminalAppLocalTests
                 require(restored.exitCode == 0, "Cannot restore the original temporary test pane");
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
                 note("TOOLS: sidebar handlers split real tmux panes, changed focus, toggled zoom, switched layouts/windows and entered history mode");
+                co_await ProbeMouseModes(page, *server, *ownedSession);
+                co_await MouseRemote(*server, restorePane);
+                for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
+                note("MOUSE: native pointer focus, compatibility with mouse off, rapid-click input routing, top status bars, zoom, failure recovery, saved settings and reconnect passed");
 
                 dialogs->prepare = [&](ContentDialog dialog) {
                     require(dialog == page->TmuxPersonalizationDialog(), "Unexpected personalization dialog");

@@ -209,6 +209,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         til::typed_event<IInspectable, Control::NoticeEventArgs> RaiseNotice;
         til::typed_event<> HidePointerCursor;
         til::typed_event<> RestorePointerCursor;
+        til::typed_event<IInspectable, Windows::UI::Xaml::Input::PointerRoutedEventArgs> TerminalPointerPressed;
         til::typed_event<> ReadOnlyChanged;
         til::typed_event<IInspectable, IInspectable> FocusFollowMouseRequested;
         til::typed_event<Control::TermControl, Windows::UI::Xaml::RoutedEventArgs> Initialized;

@@ -65,6 +65,8 @@ namespace winrt::TerminalApp::implementation
 {
     void TerminalPage::_TmuxInitialize()
     {
+        _tmuxMouseSettingsReady = true;
+        _TmuxReloadMouseMode();
         try
         {
             const auto contents = til::io::read_file_as_utf8_string_if_exists(serversPath());
@@ -421,6 +423,7 @@ namespace winrt::TerminalApp::implementation
             if (const auto control = _GetTabImpl(tab)->GetActiveTerminalControl())
             {
                 get_self<ContentManager>(_manager)->SetTmuxContext(control.ContentId(), { *_tmuxServer, session, installer });
+                _TmuxBindMouse(control);
                 if (session) { _TmuxBindGlobalTab(tab, session->key()); }
             }
         }
@@ -432,6 +435,7 @@ namespace winrt::TerminalApp::implementation
         if (!control) { return; }
         if (const auto context = get_self<ContentManager>(_manager)->GetTmuxContext(control.ContentId()))
         {
+            _TmuxBindMouse(control);
             if (!_tmuxServer || !::TmuxWorkspace::sameConnection(*_tmuxServer, context->server))
             {
                 _TmuxConnectServer(context->server);
@@ -527,9 +531,7 @@ namespace winrt::TerminalApp::implementation
             });
             NewTerminalArgs args;
             args.Profile(to_hstring(_settings.GlobalSettings().DefaultProfile()));
-            args.Commandline(::TmuxWorkspace::quoteArgument(::TmuxWorkspace::sshExecutable()) +
-                             ::TmuxWorkspace::sshArguments(*_tmuxServer, true) + L" " +
-                             ::TmuxWorkspace::quoteArgument(to_hstring("sh -c " + ::TmuxWorkspace::quoteShell(::TmuxWorkspace::attachCommand(session)))));
+            args.Commandline(_TmuxAttachCommandline(*_tmuxServer, session));
             args.TabTitle(to_hstring(session.name));
             args.SuppressApplicationTitle(true);
             args.Elevate(false);

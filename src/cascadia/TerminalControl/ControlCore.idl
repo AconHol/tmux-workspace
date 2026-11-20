@@ -84,7 +84,13 @@ namespace Microsoft.Terminal.Control
         IVector<String> QuickFixes { get; };
     };
 
-    [default_interface] runtimeclass ControlCore : ICoreState
+    interface IInputBuffering
+    {
+        void BeginInputBuffering();
+        String EndInputBuffering(Boolean replay);
+    };
+
+    [default_interface] runtimeclass ControlCore : ICoreState, IInputBuffering
     {
         ControlCore(IControlSettings settings,
                     IControlAppearance unfocusedAppearance,
