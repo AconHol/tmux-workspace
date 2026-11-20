@@ -245,6 +245,8 @@ namespace winrt::TerminalApp::implementation
         std::wstring _TmuxAttachCommandline(const ::TmuxWorkspace::Server& server, const ::TmuxWorkspace::Session& session) const;
         void _TmuxBindMouse(const winrt::Microsoft::Terminal::Control::TermControl& control);
         void _TmuxMousePointer(const winrt::Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _TmuxTouchTap(const winrt::Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::Input::TappedRoutedEventArgs& args);
+        void _TmuxFocusAtPoint(const winrt::Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::FrameworkElement& panel, Windows::Foundation::Point position);
         void _TmuxQueueMouseFocus(const winrt::Microsoft::Terminal::Control::TermControl& control, int column, int row);
         safe_void_coroutine _TmuxRunMouseFocus(std::shared_ptr<::TmuxWorkspace::MouseFocusState> state);
         safe_void_coroutine _TmuxApplyMouseMode();

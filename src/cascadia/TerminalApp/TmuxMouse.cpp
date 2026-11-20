@@ -20,6 +20,7 @@ namespace TmuxWorkspace
         struct Click { int column; int row; std::wstring input; };
         uint64_t id{};
         uint64_t generation{};
+        uint64_t settingsVersion{};
         winrt::weak_ref<TermControl> control;
         ControlCore core{ nullptr };
         ITerminalConnection connection{ nullptr };
@@ -139,16 +140,50 @@ namespace winrt::TerminalApp::implementation
                 if (const auto clicked = sender.try_as<TermControl>()) { page->_TmuxMousePointer(clicked, args); }
             }
         });
+        // TermControl handles Tapped itself to show the touch keyboard.
+        const Input::TappedEventHandler onTap{ [weak = get_weak()](const IInspectable& sender, const Input::TappedRoutedEventArgs& args) {
+            if (const auto page = weak.get(); page && page->_tmuxAlive)
+            {
+                if (const auto tapped = sender.try_as<TermControl>()) { page->_TmuxTouchTap(tapped, args); }
+            }
+        } };
+        control.AddHandler(UIElement::TappedEvent(), box_value(onTap), true);
     }
 
     void TerminalPage::_TmuxMousePointer(const TermControl& control, const Input::PointerRoutedEventArgs& args)
     {
-        if (_tmuxMouseMode != ::TmuxWorkspace::MouseMode::Compatibility || _tmuxDialogOpen || args.KeyModifiers() != Windows::System::VirtualKeyModifiers::None) { return; }
+        if (_tmuxMouseMode != ::TmuxWorkspace::MouseMode::Compatibility || _tmuxDialogOpen ||
+            args.Pointer().PointerDeviceType() == Windows::Devices::Input::PointerDeviceType::Touch ||
+            args.KeyModifiers() != Windows::System::VirtualKeyModifiers::None) { return; }
         const auto panel = viewport(control);
         if (!panel) { return; }
         const auto point = args.GetCurrentPoint(panel);
         if (!point.Properties().IsLeftButtonPressed()) { return; }
-        const auto position = point.Position();
+        _TmuxFocusAtPoint(control, panel, point.Position());
+    }
+
+    void TerminalPage::_TmuxTouchTap(const TermControl& control, const Input::TappedRoutedEventArgs& args)
+    {
+        if (_tmuxMouseMode == ::TmuxWorkspace::MouseMode::Off || _tmuxDialogOpen ||
+            args.PointerDeviceType() != Windows::Devices::Input::PointerDeviceType::Touch) { return; }
+        const auto panel = viewport(control);
+        if (!panel) { return; }
+
+        // A tap anywhere else in the control (e.g. search or the scrollbar)
+        // must not select a pane. The transparent input grid can be the source
+        // when the rendered terminal itself has no XAML hit-test surface.
+        const auto inputGrid = panel.Parent();
+        auto source = args.OriginalSource().try_as<DependencyObject>();
+        while (source && source != panel && source != inputGrid)
+        {
+            if (source.try_as<Controls::Control>()) { return; }
+            source = Media::VisualTreeHelper::GetParent(source);
+        }
+        if (source) { _TmuxFocusAtPoint(control, panel, args.GetPosition(panel)); }
+    }
+
+    void TerminalPage::_TmuxFocusAtPoint(const TermControl& control, const FrameworkElement& panel, Windows::Foundation::Point position)
+    {
         if (position.X < 0 || position.Y < 0 || position.X >= panel.ActualWidth() || position.Y >= panel.ActualHeight() ||
             control.ScrollOffset() < control.BufferHeight() - control.ViewHeight()) { return; }
         const auto content = get_self<ContentManager>(_manager)->TryLookupCore(control.ContentId());
@@ -161,7 +196,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_TmuxQueueMouseFocus(const TermControl& control, int column, int row)
     {
-        if (_tmuxMouseMode != ::TmuxWorkspace::MouseMode::Compatibility || !_tmuxAlive || _tmuxDialogOpen ||
+        if (_tmuxMouseMode == ::TmuxWorkspace::MouseMode::Off || !_tmuxAlive || _tmuxDialogOpen ||
             column < 0 || row < 0 || column > 32766 || row > 32766 || control.ConnectionState() != ConnectionState::Connected) { return; }
         const auto manager = get_self<ContentManager>(_manager);
         const auto context = manager->GetTmuxContext(control.ContentId());
@@ -181,6 +216,7 @@ namespace winrt::TerminalApp::implementation
         auto state = std::make_shared<::TmuxWorkspace::MouseFocusState>();
         state->id = id;
         state->generation = _tmuxGeneration;
+        state->settingsVersion = _tmuxMouseSettingsVersion;
         state->control = make_weak(control);
         state->core = content.Core();
         state->connection = control.Connection();
@@ -210,7 +246,7 @@ namespace winrt::TerminalApp::implementation
             co_await resume_foreground(dispatcher);
             const auto control = state->control.get();
             if (!_tmuxAlive) { co_return; }
-            if (state->generation != _tmuxGeneration || _tmuxMouseMode != ::TmuxWorkspace::MouseMode::Compatibility ||
+            if (state->generation != _tmuxGeneration || state->settingsVersion != _tmuxMouseSettingsVersion ||
                 !control || control.Connection() != state->connection || control.ConnectionState() != ConnectionState::Connected ||
                 (result.exitCode != 0 && result.exitCode != 2)) { failed = true; break; }
             if (state->clicks.size() == 1)

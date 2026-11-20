@@ -340,6 +340,59 @@ namespace TerminalAppLocalTests
             co_await pause(page->Dispatcher());
         }
 
+        static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false)
+        {
+            using namespace winrt;
+            const auto control = page->_GetActiveControl();
+            const auto panel = FindVisual(control, L"SwapChainPanel");
+            if (!panel) { throw hresult_error(E_FAIL, L"No terminal viewport for touch input"); }
+            const auto core = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core();
+            const auto font = core.FontSizeInDips();
+            const auto hwnd = *page->_hostingHwnd;
+            const auto origin = panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
+            const auto scale = GetDpiForWindow(hwnd) / 96.0f;
+            POINT location{ static_cast<LONG>(std::lround(origin.X * scale)), static_cast<LONG>(std::lround(origin.Y * scale)) };
+            check_bool(ClientToScreen(hwnd, &location));
+            const auto device = CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_NONE);
+            if (!device)
+            {
+                throw hresult_error(HRESULT_FROM_WIN32(GetLastError()), L"CreateSyntheticPointerDevice failed");
+            }
+            const auto destroyDevice = wil::scope_exit([&]() noexcept { DestroySyntheticPointerDevice(device); });
+            auto inject = [&](POINTER_FLAGS flags) {
+                if (GetAncestor(WindowFromPoint(location), GA_ROOT) != hwnd)
+                {
+                    throw hresult_error(E_FAIL, L"Touch coordinates did not hit the test window");
+                }
+                POINTER_TYPE_INFO pointer{};
+                pointer.type = PT_TOUCH;
+                auto& contact = pointer.touchInfo;
+                contact.pointerInfo.pointerType = PT_TOUCH;
+                contact.pointerInfo.pointerFlags = flags;
+                const POINT devicePoint{ location.x - GetSystemMetrics(SM_XVIRTUALSCREEN), location.y - GetSystemMetrics(SM_YVIRTUALSCREEN) };
+                contact.pointerInfo.ptPixelLocation = devicePoint;
+                contact.touchMask = TOUCH_MASK_CONTACTAREA;
+                contact.rcContact = { devicePoint.x - 2, devicePoint.y - 2, devicePoint.x + 2, devicePoint.y + 2 };
+                if (!InjectSyntheticPointerInput(device, &pointer, 1))
+                {
+                    throw hresult_error(HRESULT_FROM_WIN32(GetLastError()), hstring{ L"InjectSyntheticPointerInput failed, flags=" + std::to_wstring(flags) });
+                }
+            };
+            inject(POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_DOWN);
+            co_await resume_after(std::chrono::milliseconds{ 50 });
+            co_await resume_foreground(page->Dispatcher());
+            if (swipe)
+            {
+                location.y += static_cast<LONG>(std::lround(40 * scale));
+            }
+            inject(POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_UPDATE);
+            co_await resume_after(std::chrono::milliseconds{ 50 });
+            co_await resume_foreground(page->Dispatcher());
+            inject(POINTER_FLAG_UP);
+            co_await pause(page->Dispatcher());
+            co_await WaitMouseFocus(page);
+        }
+
         static winrt::Windows::Foundation::IAsyncAction ProbeMouseModes(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, ::TmuxWorkspace::Session session)
         {
             using namespace winrt;
@@ -358,6 +411,16 @@ namespace TerminalAppLocalTests
             require(panes.size() >= 2, "Mouse test requires real split panes");
             const auto a = panes.front();
             const auto b = panes.back();
+            const bool testTouch = GetEnvironmentVariableW(L"TMUX_WORKFLOW_TOUCH_INPUT", nullptr, 0) > 0;
+            const auto hwnd = *page->_hostingHwnd;
+            const auto restoreZOrder = wil::scope_exit([&]() noexcept {
+                if (testTouch) { SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+            });
+            if (testTouch)
+            {
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                co_await pause(page->Dispatcher());
+            }
             const auto column = [](const Pane& value) { return value.left + value.width / 2; };
             const auto row = [](const Pane& value) { return value.top + value.height / 2; };
             auto control = page->_GetActiveControl();
@@ -370,9 +433,24 @@ namespace TerminalAppLocalTests
             native.PointerReleased(static_cast<MouseButtonState>(0), WM_LBUTTONUP, {}, point);
             co_await pause(page->Dispatcher());
             require(to_string(co_await MouseRemote(server, active)).starts_with(b.id + "\n"), "Native pointer pipeline did not select the clicked tmux pane");
+            if (testTouch)
+            {
+                co_await TouchGesture(page, column(a), row(a));
+                if (!to_string(co_await MouseRemote(server, active)).starts_with(a.id + "\n"))
+                { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane in native mode"); }
+            }
 
             co_await SetMouseMode(page, Mode::Compatibility);
             require(to_string(co_await MouseRemote(server, mouse)).starts_with("off"), "Compatibility mode must work with tmux mouse disabled");
+            if (testTouch)
+            {
+                co_await TouchGesture(page, column(b), row(b));
+                if (!to_string(co_await MouseRemote(server, active)).starts_with(b.id + "\n"))
+                { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane with tmux mouse off"); }
+                co_await TouchGesture(page, column(a), row(a), true);
+                if (!to_string(co_await MouseRemote(server, active)).starts_with(b.id + "\n"))
+                { throw hresult_error(E_FAIL, L"A touch swipe changed pane focus"); }
+            }
             // Type immediately after two fast clicks. The first batch belongs
             // to B and the second to A even while SSH selection is in flight.
             page->_TmuxQueueMouseFocus(control, column(b), row(b));
@@ -418,6 +496,12 @@ namespace TerminalAppLocalTests
             page->TmuxMouseProblem().IsOpen(false);
 
             co_await SetMouseMode(page, Mode::Off);
+            if (testTouch)
+            {
+                co_await TouchGesture(page, column(b), row(b));
+                if (!to_string(co_await MouseRemote(server, active)).starts_with(topPane.id + "\n"))
+                { throw hresult_error(E_FAIL, L"Touch tap changed pane focus in Off mode"); }
+            }
             page->_TmuxQueueMouseFocus(control, column(b), row(b));
             require(page->_tmuxMouseFocusRequests.empty(), "Off mode initiated a compatibility focus request");
             co_await SetMouseMode(page, Mode::Compatibility);
@@ -668,6 +752,10 @@ namespace TerminalAppLocalTests
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
                 note("TOOLS: sidebar handlers split real tmux panes, changed focus, toggled zoom, switched layouts/windows and entered history mode");
                 co_await ProbeMouseModes(page, *server, *ownedSession);
+                if (GetEnvironmentVariableW(L"TMUX_WORKFLOW_TOUCH_INPUT", nullptr, 0))
+                {
+                    note("TOUCH: Windows touch gestures passed in Native, Compatibility and Off; swiping did not switch pane");
+                }
                 co_await MouseRemote(*server, restorePane);
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
                 note("MOUSE: native pointer focus, compatibility with mouse off, rapid-click input routing, top status bars, zoom, failure recovery, saved settings and reconnect passed");

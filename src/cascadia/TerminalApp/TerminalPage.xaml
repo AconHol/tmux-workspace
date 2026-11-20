@@ -375,12 +375,12 @@
                                        SmallChange="1" SpinButtonPlacementMode="Compact" />
                     </Grid>
                     <ToggleSwitch x:Name="TmuxAcrylic" Header="背景半透明材质" OnContent="开" OffContent="关" />
-                    <ComboBox x:Name="TmuxMouseMode" Header="窗格鼠标模式" HorizontalAlignment="Stretch">
+                    <ComboBox x:Name="TmuxMouseMode" Header="窗格鼠标与触屏" HorizontalAlignment="Stretch">
                         <ComboBoxItem Content="原生：点击、拖动分隔线和滚动" Tag="native" />
                         <ComboBoxItem Content="兼容：通过应用点击切换窗格" Tag="compatibility" />
-                        <ComboBoxItem Content="关闭自动鼠标切换" Tag="off" />
+                        <ComboBoxItem Content="关闭点击切换" Tag="off" />
                     </ComboBox>
-                    <TextBlock Text="兼容模式不依赖 tmux 鼠标功能，通过 SSH 定位窗格；点击后键入的内容会等待定位完成再发送。原生模式下，Shift+拖动可选择本地文本。"
+                    <TextBlock Text="原生和兼容模式都支持轻点触屏切换窗格。兼容模式不依赖 tmux 鼠标功能。原生模式下，Shift+拖动可选择本地文本。"
                                TextWrapping="Wrap" Style="{ThemeResource CaptionTextBlockStyle}" />
                     <StackPanel Spacing="4">
                         <TextBlock Text="背景不透明度" />

@@ -5,6 +5,7 @@ param(
     [string] $WorkDirectory,
     [string] $AiBaseUrl,
     [string] $JoinProbeDirectory,
+    [switch] $TouchInput,
     [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -48,6 +49,7 @@ try {
     $start.Environment['TMUX_WORKFLOW_SERVER'] = $SshCommand
     $start.Environment['TMUX_WORKFLOW_REPORT'] = $report
     if ($AiBaseUrl) { $start.Environment['TMUX_WORKFLOW_AI_URL'] = $AiBaseUrl }
+    if ($TouchInput) { $start.Environment['TMUX_WORKFLOW_TOUCH_INPUT'] = '1' }
     if ($JoinProbeDirectory) { $start.Environment['TMUX_WORKFLOW_JOIN_PROBE'] = [IO.Path]::GetFullPath($JoinProbeDirectory) }
     $process = [Diagnostics.Process]::Start($start)
     if (-not $process.WaitForExit(60000)) {
@@ -60,7 +62,8 @@ try {
     if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
     if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report) -or
         -not (Select-String -LiteralPath $report -SimpleMatch 'PASS: real workspace workflow completed' -Quiet) -or
-        -not (Select-String -LiteralPath $report -SimpleMatch 'PIXELS: opaque join rendered without uncovered pixels' -Quiet)) {
+        -not (Select-String -LiteralPath $report -SimpleMatch 'PIXELS: opaque join rendered without uncovered pixels' -Quiet) -or
+        ($TouchInput -and -not (Select-String -LiteralPath $report -SimpleMatch 'TOUCH: Windows touch gestures passed' -Quiet))) {
         throw "Workspace workflow failed with exit code $($process.ExitCode)."
     }
 }
