@@ -67,7 +67,8 @@ try {
         ($TouchInput -and (
             -not (Select-String -LiteralPath $report -SimpleMatch 'TOUCH: Windows touch gestures passed' -Quiet) -or
             -not (Select-String -LiteralPath $report -SimpleMatch 'COPY: long press and drag selected terminal output' -Quiet) -or
-            -not (Select-String -LiteralPath $report -SimpleMatch 'PANE COPY: terminal long press copied the pointed inactive pane' -Quiet)))) {
+            -not (Select-String -LiteralPath $report -SimpleMatch 'PANE COPY: terminal long press copied the pointed inactive pane' -Quiet) -or
+            -not (Select-String -LiteralPath $report -SimpleMatch 'PANE SELECTION: multiline drag copied only the original pane' -Quiet)))) {
         throw "Workspace workflow failed with exit code $($process.ExitCode)."
     }
 }

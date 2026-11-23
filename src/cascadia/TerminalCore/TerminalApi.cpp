@@ -393,6 +393,7 @@ void Terminal::NotifyBufferRotation(const int delta)
         if (selection->end.y < delta)
         {
             selection->active = false;
+            selection->paneBounds.reset();
         }
         else
         {
@@ -402,6 +403,12 @@ void Terminal::NotifyBufferRotation(const int delta)
             selection->end.y = std::max(selection->end.y - delta, 0);
             // Make sure to sync the pivot with whichever value is the right one.
             selection->pivot = pivotWasStart ? selection->start : selection->end;
+            if (selection->paneBounds)
+            {
+                auto& bounds = *selection->paneBounds;
+                bounds.top = std::max(bounds.top - delta, 0);
+                bounds.bottom = std::max(bounds.bottom - delta, 0);
+            }
         }
     }
 

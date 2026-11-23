@@ -241,12 +241,13 @@ namespace TmuxWorkspace
             "; status=$(tmux show-options -Aqv -t " + target + " status) || exit 1; "
             "case \"$status\" in off|0) lines=0;; on) lines=1;; [1-5]) lines=$status;; *) lines=1;; esac; "
             "position=$(tmux show-options -Aqv -t " + target + " status-position) || exit 1; "
-            "if [ \"$position\" = top ]; then y=$((y-lines)); fi; "
+            "status_top=0; if [ \"$position\" = top ]; then status_top=$lines; y=$((y-lines)); fi; "
             "[ \"$y\" -ge 0 ] || exit 2; panes=$(tmux list-panes -t " + quoteShell(session.id + ":") +
             " -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_zoomed_flag} #{pane_active} #{window_width} #{window_height}') || exit 1; printf '%s\\n' \"$panes\" | "
             "{ while read -r pane left top width height zoom active ww wh; do "
             "if [ \"$zoom\" = 1 ]; then "
             "[ \"$active\" = 1 ] && [ \"$x\" -lt \"$ww\" ] && [ \"$y\" -lt \"$wh\" ] || continue; "
+            "left=0; top=0; width=$ww; height=$wh; "
             "else [ \"$x\" -ge \"$left\" ] && [ \"$x\" -lt $((left+width)) ] && "
             "[ \"$y\" -ge \"$top\" ] && [ \"$y\" -lt $((top+height)) ] || continue; fi; "
             + std::string{ onHit } + "; exit $?; done; exit 2; }";
@@ -260,6 +261,11 @@ namespace TmuxWorkspace
     inline std::string capturePaneAtCommand(const Session& session, int column, int row)
     {
         return paneAtCommand(session, column, row, "tmux capture-pane -p -S -500 -t \"$pane\"");
+    }
+
+    inline std::string paneBoundsAtCommand(const Session& session, int column, int row)
+    {
+        return paneAtCommand(session, column, row, "printf '%s %s %s %s\\n' \"$left\" \"$((top+status_top))\" \"$width\" \"$height\"");
     }
 
     inline bool isEmptyServerError(std::string_view error)

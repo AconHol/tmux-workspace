@@ -36,13 +36,21 @@ namespace Microsoft.Terminal.Control
         event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Core.Point> PaneCopyRequested;
     };
 
+    interface ITerminalPaneSelection
+    {
+        event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Core.Point> PaneSelectionBoundsRequested;
+        UInt64 PaneSelectionRevision { get; };
+        void SetPaneSelectionBounds(UInt64 revision, Windows.Foundation.Rect cells);
+    };
+
     [default_interface] runtimeclass TermControl : Windows.UI.Xaml.Controls.UserControl,
                                                    IDirectKeyListener,
                                                    IMouseWheelListener,
                                                    ICoreState,
                                                    Windows.UI.Xaml.Data.INotifyPropertyChanged,
                                                    ITerminalPointerHost,
-                                                   ITerminalPaneCopy
+                                                   ITerminalPaneCopy,
+                                                   ITerminalPaneSelection
     {
         TermControl(ControlInteractivity content);
 

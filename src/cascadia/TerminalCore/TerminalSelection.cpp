@@ -57,6 +57,35 @@ std::vector<til::point_span> Terminal::_GetSelectionSpans() const noexcept
 
     try
     {
+        if (const auto bounds = _selection->paneBounds)
+        {
+            if (bounds->left >= bounds->right || bounds->top >= bounds->bottom) { return result; }
+            const auto& buffer = _activeBuffer();
+            const auto& selection = *_selection;
+            const auto firstRow = std::max(selection.start.y, bounds->top);
+            const auto lastRow = std::min({ selection.end.y, bounds->bottom - 1, buffer.GetSize().BottomInclusive() });
+            const auto [blockLeft, blockRight] = std::minmax(selection.start.x, selection.end.x);
+            for (auto row = firstRow; row <= lastRow; ++row)
+            {
+                const auto start = selection.blockSelection ? blockLeft : (row == selection.start.y ? selection.start.x : bounds->left);
+                const auto end = selection.blockSelection ? blockRight : (row == selection.end.y ? selection.end.x : bounds->right);
+                const auto left = std::max(start, bounds->left);
+                const auto right = std::min(end, bounds->right);
+                if (left >= right) { continue; }
+                const auto& line = buffer.GetRowByOffset(row);
+                // Drop glyphs clipped by the pane edge. Within the pane, a
+                // partial cell selection still selects the whole glyph.
+                const auto paneLeft = line.AdjustToGlyphStart(bounds->left) == bounds->left ?
+                    bounds->left : line.AdjustToGlyphEnd(bounds->left);
+                const auto glyphLeft = std::max(paneLeft, line.AdjustToGlyphStart(left));
+                const auto glyphRight = std::min(line.AdjustToGlyphStart(bounds->right), line.AdjustToGlyphEnd(right));
+                if (glyphLeft < glyphRight)
+                {
+                    result.emplace_back(til::point{ glyphLeft, row }, til::point{ glyphRight, row });
+                }
+            }
+            return result;
+        }
         return _activeBuffer().GetTextSpans(_selection->start, _selection->end, _selection->blockSelection, false);
     }
     CATCH_LOG();
@@ -914,10 +943,54 @@ void Terminal::_MoveByBuffer(SelectionDirection direction, til::point& pos) noex
 void Terminal::ClearSelection()
 {
     _assertLocked();
-    _selection.write()->active = false;
+    auto selection = _selection.write();
+    selection->active = false;
+    selection->paneBounds.reset();
     _selectionMode = SelectionInteractionMode::None;
     _selectionEndpoint = static_cast<SelectionEndpoint>(0);
     _anchorInactiveSelectionEndpoint = false;
+}
+
+void Terminal::BeginPaneSelection()
+{
+    _assertLocked();
+    _selection.write()->paneBounds = til::rect{};
+}
+
+bool Terminal::HasPaneSelectionBounds() const noexcept
+{
+    _assertLocked();
+    return _selection->paneBounds.has_value();
+}
+
+bool Terminal::PaneSelectionPending() const noexcept
+{
+    _assertLocked();
+    const auto bounds = _selection->paneBounds;
+    return bounds && bounds->left >= bounds->right;
+}
+
+bool Terminal::SetPaneSelectionBounds(til::rect viewportBounds)
+{
+    _assertLocked();
+    if (!PaneSelectionPending()) { return false; }
+    const auto size = _activeBuffer().GetSize();
+    const auto offset = _VisibleStartIndex();
+    const til::rect bounds{
+        std::max(0, viewportBounds.left),
+        std::max(0, viewportBounds.top + offset),
+        std::min(viewportBounds.right, size.RightExclusive()),
+        std::min(viewportBounds.bottom + offset, size.BottomExclusive())
+    };
+    if (bounds.left >= bounds.right || bounds.top >= bounds.bottom)
+    {
+        ClearSelection();
+    }
+    else
+    {
+        _selection.write()->paneBounds = bounds;
+    }
+    return true;
 }
 
 // Method Description:
@@ -948,6 +1021,30 @@ Terminal::TextCopyData Terminal::RetrieveSelectedTextFromBuffer(const bool singl
 
     const auto& textBuffer = _activeBuffer();
 
+    if (_selection->paneBounds)
+    {
+        bool first{ true };
+        for (const auto& [start, end] : _GetSelectionSpans())
+        {
+            if (!first && (!singleLine || _selection->blockSelection)) { data.plainText += L"\r\n"; }
+            first = false;
+            const auto trim = !singleLine && (!_selection->blockSelection || _trimBlockSelection);
+            auto right = end.x;
+            if (trim)
+            {
+                const auto selected = textBuffer.GetRowByOffset(start.y).GetText(start.x, right);
+                const auto last = selected.find_last_not_of(L' ');
+                const auto length = last == std::wstring_view::npos ? 0 : last + 1;
+                right -= static_cast<til::CoordType>(selected.size() - length);
+            }
+            TextBuffer::CopyRequest row{ textBuffer, start, end, true, false, false, true, true };
+            // CopyRequest clamps endpoints to readable cells. In block mode
+            // the row helper uses maxX as an exclusive column boundary.
+            row.maxX = right;
+            data.plainText += withControlSequences ? textBuffer.GetWithControlSequences(row) : textBuffer.GetPlainText(row);
+        }
+        return data;
+    }
     const auto req = TextBuffer::CopyRequest::FromConfig(textBuffer, _selection->start, _selection->end, singleLine, _selection->blockSelection, _trimBlockSelection);
     if (withControlSequences)
     {

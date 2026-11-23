@@ -312,6 +312,10 @@ public:
     UpdateSelectionParams ConvertKeyEventToUpdateSelectionParams(const ControlKeyStates mods, const WORD vkey) const noexcept;
     til::point SelectionStartForRendering() const;
     til::point SelectionEndForRendering() const;
+    void BeginPaneSelection();
+    bool SetPaneSelectionBounds(til::rect viewportBounds);
+    bool PaneSelectionPending() const noexcept;
+    bool HasPaneSelectionBounds() const noexcept;
     SelectionEndpoint SelectionEndpointTarget() const noexcept;
 
     TextCopyData RetrieveSelectedTextFromBuffer(const bool singleLine, const bool withControlSequences = false, const bool html = false, const bool rtf = false) const;
@@ -395,6 +399,7 @@ private:
         til::point pivot;
         bool blockSelection = false;
         bool active = false;
+        std::optional<til::rect> paneBounds;
     };
     til::generational<SelectionInfo> _selection{};
     std::wstring _wordDelimiters;

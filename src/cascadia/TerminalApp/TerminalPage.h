@@ -258,6 +258,7 @@ namespace winrt::TerminalApp::implementation
         void _TmuxUpdateTools();
         uint64_t _tmuxPaneCopyRequest{};
         safe_void_coroutine _TmuxCopyPaneAt(winrt::Microsoft::Terminal::Control::TermControl control, int column, int row);
+        safe_void_coroutine _TmuxSetPaneSelectionBounds(winrt::Microsoft::Terminal::Control::TermControl control, int column, int row);
         safe_void_coroutine _TmuxActionClicked(Windows::Foundation::IInspectable sender, Windows::UI::Xaml::RoutedEventArgs);
         safe_void_coroutine _TmuxTranslateClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
         safe_void_coroutine _TmuxTranslateSubmit();

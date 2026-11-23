@@ -226,6 +226,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         Control::SelectionData SelectionInfo() const;
         void SetSelectionAnchor(const til::point position);
         void SetEndSelectionPoint(const til::point position);
+        void BeginPaneSelection();
+        bool SetPaneSelectionBounds(til::rect bounds);
+        bool PaneSelectionPending() const;
+        void CancelPaneSelection();
 
         SearchResults Search(const SearchRequest& request);
         const std::vector<til::point_span>& SearchResultRows() const noexcept;

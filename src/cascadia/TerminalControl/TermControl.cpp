@@ -1987,6 +1987,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         if (!hasSelection && !_paneContextCell) { return; }
         TouchCopyItem().Text(CopyCommandButton().Label());
         TouchCopyItem().Visibility(hasSelection ? Visibility::Visible : Visibility::Collapsed);
+        TouchCopyItem().IsEnabled(!get_self<ControlCore>(_core)->PaneSelectionPending());
         const auto copyPane = CopyPaneContextItem();
         copyPane.Visibility(_paneContextCell ? Visibility::Visible : Visibility::Collapsed);
         copyPane.Tag(_paneContextCell ? box_value(*_paneContextCell) : nullptr);
@@ -1996,10 +1997,62 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         TouchCopyMenu().ShowAt(*this, options);
     }
 
+    void TermControl::_beginPaneSelection(std::optional<Core::Point> cell)
+    {
+        ++_paneSelectionRevision;
+        _paneSelectionOrigin = cell;
+        _copyPaneSelectionWhenReady = false;
+        if (cell)
+        {
+            get_self<ControlCore>(_core)->BeginPaneSelection();
+            if (_core.HasSelection()) { _requestPaneSelectionBounds(); }
+        }
+    }
+
+    void TermControl::_cancelPaneSelection()
+    {
+        ++_paneSelectionRevision;
+        _paneSelectionOrigin.reset();
+        _copyPaneSelectionWhenReady = false;
+        if (_core) { get_self<ControlCore>(_core)->CancelPaneSelection(); }
+    }
+
+    void TermControl::_requestPaneSelectionBounds()
+    {
+        if (const auto cell = std::exchange(_paneSelectionOrigin, std::nullopt))
+        {
+            PaneSelectionBoundsRequested.raise(*this, *cell);
+        }
+    }
+
+    void TermControl::SetPaneSelectionBounds(uint64_t revision, Windows::Foundation::Rect cells)
+    {
+        if (_IsClosing() || revision != _paneSelectionRevision) { return; }
+        if (_core.ScrollOffset() < _core.BufferHeight() - _core.ViewHeight())
+        {
+            _cancelPaneSelection();
+            return;
+        }
+        const til::rect bounds{ static_cast<int>(cells.X), static_cast<int>(cells.Y),
+                                static_cast<int>(cells.X + cells.Width), static_cast<int>(cells.Y + cells.Height) };
+        if (const auto core = get_self<ControlCore>(_core); core->SetPaneSelectionBounds(bounds))
+        {
+            TouchCopyItem().IsEnabled(_core.HasSelection());
+            if (std::exchange(_copyPaneSelectionWhenReady, false) && _core.HasSelection())
+            {
+                _interactivity.CopySelectionToClipboard(false, false, _core.Settings().CopyFormatting());
+            }
+        }
+    }
+
     void TermControl::_PaneContextClosed(const IInspectable&, const IInspectable&)
     {
         _paneContextCell.reset();
-        if (!_IsClosing() && _core.HasSelection()) { _core.ClearSelection(); }
+        if (!_IsClosing())
+        {
+            _cancelPaneSelection();
+            if (_core.HasSelection()) { _core.ClearSelection(); }
+        }
     }
 
     void TermControl::_PaneCopyCommandHandler(const IInspectable& sender, const RoutedEventArgs&)
@@ -2043,6 +2096,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         bool selectionNeedsCopy{};
         get_self<ControlCore>(_core)->LeftClickOnTerminal(cell, 2, false, false, false, selectionNeedsCopy);
         _touchSelecting = _core.HasSelection();
+        _beginPaneSelection(_paneContextCell);
         args.Handled(true);
     }
 
@@ -2059,6 +2113,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             _touchPointerId.reset();
             _touchSelecting = false;
             _paneContextCell.reset();
+            _cancelPaneSelection();
             _interactivity.TouchReleased();
         }
     }
@@ -2141,6 +2196,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                           point.Timestamp(),
                                           ControlKeyStates{ args.KeyModifiers() },
                                           _toTerminalOrigin(cursorPosition));
+            if (update == WM_LBUTTONDOWN &&
+                (!get_self<ControlCore>(_core)->IsVtMouseModeEnabled() ||
+                 ControlKeyStates{ args.KeyModifiers() }.IsShiftPressed()))
+            {
+                _beginPaneSelection(_paneCopyCellAt(args.GetCurrentPoint(SwapChainPanel()).Position()));
+            }
         }
 
         args.Handled(true);
@@ -2186,6 +2247,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                                                        _focused,
                                                                        pixelPosition,
                                                                        _pointerPressedInBounds);
+            if (_paneSelectionOrigin && _core.HasSelection()) { _requestPaneSelectionBounds(); }
 
             // GH#9109 - Only start an auto-scroll when the drag actually
             // started within our bounds. Otherwise, someone could start a drag
@@ -2269,7 +2331,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
 
         const bool releasedTouch = type == Windows::Devices::Input::PointerDeviceType::Touch && _touchPointerId == ptr.PointerId();
-        const bool showCopy = releasedTouch && _touchSelecting && (_core.HasSelection() || _paneContextCell);
+        const bool showCopy = releasedTouch && (_paneContextCell || (_touchSelecting && _core.HasSelection()));
         if (releasedTouch)
         {
             _touchPointerId.reset();
@@ -2281,6 +2343,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         if (type == Windows::Devices::Input::PointerDeviceType::Mouse ||
             type == Windows::Devices::Input::PointerDeviceType::Pen)
         {
+            const auto core = get_self<ControlCore>(_core);
+            if (GetPointerUpdateKind(point) == WM_LBUTTONUP && core->PaneSelectionPending())
+            {
+                if (!_core.HasSelection()) { _cancelPaneSelection(); }
+                else { _copyPaneSelectionWhenReady = core->CopyOnSelect(); }
+            }
             _interactivity.PointerReleased(TermControl::GetPressedMouseButtons(point),
                                            TermControl::GetPointerUpdateKind(point),
                                            ControlKeyStates(args.KeyModifiers()),
@@ -2616,6 +2684,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             return;
         }
 
+        _cancelPaneSelection();
         const auto newSize = e.NewSize();
         _core.SizeChanged(newSize.Width, newSize.Height);
 
@@ -2655,6 +2724,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     void TermControl::_SwapChainScaleChanged(const Windows::UI::Xaml::Controls::SwapChainPanel& sender,
                                              const Windows::Foundation::IInspectable& /*args*/)
     {
+        _cancelPaneSelection();
         const auto scaleX = sender.CompositionScaleX();
 
         _core.ScaleChanged(scaleX);
@@ -2740,7 +2810,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         const auto successfulCopy = _interactivity.CopySelectionToClipboard(singleLine, withControlSequences, formats);
 
-        if (dismissSelection)
+        if (dismissSelection && successfulCopy)
         {
             _core.ClearSelection();
         }

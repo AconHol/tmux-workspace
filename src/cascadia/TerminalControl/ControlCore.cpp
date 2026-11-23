@@ -1416,7 +1416,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             const auto lock = _terminal->LockForWriting();
 
             // no selection --> nothing to copy
-            if (!_terminal->IsSelectionActive())
+            if (!_terminal->IsSelectionActive() || _terminal->PaneSelectionPending())
             {
                 return false;
             }
@@ -1450,6 +1450,37 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         const auto lock = _terminal->LockForWriting();
         _terminal->ClearSelection();
         _updateSelectionUI();
+    }
+
+    void ControlCore::BeginPaneSelection()
+    {
+        const auto lock = _terminal->LockForWriting();
+        _terminal->BeginPaneSelection();
+        _updateSelectionUI();
+    }
+
+    bool ControlCore::SetPaneSelectionBounds(til::rect bounds)
+    {
+        const auto lock = _terminal->LockForWriting();
+        if (!_terminal->SetPaneSelectionBounds(bounds)) { return false; }
+        _updateSelectionUI();
+        return true;
+    }
+
+    bool ControlCore::PaneSelectionPending() const
+    {
+        const auto lock = _terminal->LockForReading();
+        return _terminal->PaneSelectionPending();
+    }
+
+    void ControlCore::CancelPaneSelection()
+    {
+        const auto lock = _terminal->LockForWriting();
+        if (_terminal->HasPaneSelectionBounds())
+        {
+            _terminal->ClearSelection();
+            _updateSelectionUI();
+        }
     }
 
     bool ControlCore::ToggleBlockSelection()

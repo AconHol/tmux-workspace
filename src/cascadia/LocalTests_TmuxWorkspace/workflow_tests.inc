@@ -342,15 +342,21 @@ namespace TerminalAppLocalTests
         }
 
         static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false,
-                                                                   std::optional<int> holdToColumn = std::nullopt)
+                                                                   std::optional<int> holdToColumn = std::nullopt,
+                                                                   std::optional<int> holdToRow = std::nullopt)
         {
             using namespace winrt;
+            const auto hwnd = *page->_hostingHwnd;
+            if (IsIconic(hwnd))
+            {
+                ShowWindow(hwnd, SW_RESTORE);
+                co_await pause(page->Dispatcher());
+            }
             const auto control = page->_GetActiveControl();
             const auto panel = FindVisual(control, L"SwapChainPanel");
             if (!panel) { throw hresult_error(E_FAIL, L"No terminal viewport for touch input"); }
             const auto core = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core();
             const auto font = core.FontSizeInDips();
-            const auto hwnd = *page->_hostingHwnd;
             const auto origin = panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
             const auto scale = GetDpiForWindow(hwnd) / 96.0f;
             POINT location{ static_cast<LONG>(std::lround(origin.X * scale)), static_cast<LONG>(std::lround(origin.Y * scale)) };
@@ -364,7 +370,10 @@ namespace TerminalAppLocalTests
             auto inject = [&](POINTER_FLAGS flags) {
                 if (GetAncestor(WindowFromPoint(location), GA_ROOT) != hwnd)
                 {
-                    throw hresult_error(E_FAIL, L"Touch coordinates did not hit the test window");
+                    throw hresult_error(E_FAIL, hstring{ L"Touch missed the test window at " +
+                                                            std::to_wstring(location.x) + L"," + std::to_wstring(location.y) +
+                                                            L" for cell " + std::to_wstring(column) + L"," + std::to_wstring(row) +
+                                                            L" with flags " + std::to_wstring(flags) });
                 }
                 POINTER_TYPE_INFO pointer{};
                 pointer.type = PT_TOUCH;
@@ -392,6 +401,10 @@ namespace TerminalAppLocalTests
                     inject(POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_UPDATE);
                 }
                 location.x += static_cast<LONG>(std::lround((*holdToColumn - column) * font.Width * scale));
+                if (holdToRow)
+                {
+                    location.y += static_cast<LONG>(std::lround((*holdToRow - row) * font.Height * scale));
+                }
             }
             co_await resume_after(std::chrono::milliseconds{ 50 });
             co_await resume_foreground(page->Dispatcher());
@@ -448,6 +461,51 @@ namespace TerminalAppLocalTests
                 throw hresult_error(E_FAIL, L"Touch copy changed the active pane");
             }
             if (control.HasSelection()) { throw hresult_error(E_FAIL, L"Copy left a stale text highlight"); }
+        }
+
+        static winrt::Windows::Foundation::IAsyncAction ProbeMultilinePaneSelection(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server,
+                                                                                     ::TmuxWorkspace::Session session,
+                                                                                     std::string pane, std::string neighbour)
+        {
+            using namespace winrt;
+            const auto control = page->_GetActiveControl();
+            const auto target = ::TmuxWorkspace::quoteShell(session.id);
+            auto originalLayout = to_string(co_await MouseRemote(server, "tmux display-message -p -t " + target + " '#{window_layout}'"));
+            originalLayout.erase(originalLayout.find_last_not_of("\r\n") + 1);
+            co_await MouseRemote(server, "tmux select-layout -t " + target + " even-horizontal");
+            std::istringstream geometry{ to_string(co_await MouseRemote(server, "tmux list-panes -t " + target +
+                                                                      " -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width}'")) };
+            std::string id;
+            int x{}, y{}, width{}, left{}, top{}, paneWidth{}, neighbourLeft{};
+            while (geometry >> id >> x >> y >> width)
+            {
+                if (id == pane) { left = x; top = y; paneWidth = width; }
+                if (id == neighbour) { neighbourLeft = x; }
+            }
+            if (paneWidth < 8 || neighbourLeft <= left) { throw hresult_error(E_FAIL, L"Expected side-by-side panes in the selection fixture"); }
+            const auto write = [](const std::string& paneId, std::string_view content) {
+                const auto target = ::TmuxWorkspace::quoteShell(paneId);
+                const auto command = ::TmuxWorkspace::quoteShell("printf '" + std::string{ content } + "'");
+                return "tmux send-keys -t " + target + " C-u; tmux send-keys -t " + target + " -l -- " + command +
+                    "; tmux send-keys -t " + target + " Enter";
+            };
+            co_await MouseRemote(server, write(pane, "\\033[2J\\033[2;1H> alpha\\033[3;1H中文 X\\033[4;1Hend\\033[7;1H") +
+                                       "; " + write(neighbour, "\\033[2J\\033[2;1HRIGHT1\\033[3;1HRIGHT2\\033[4;1HRIGHT3\\033[7;1H"));
+            for (int i = 0; i < 3; ++i) { co_await pause(page->Dispatcher()); }
+
+            hstring copied;
+            const auto copyEvent = control.WriteToClipboard(auto_revoke, [&](const auto&, const auto& args) { copied = args.Plain(); });
+            // Drag from alpha into another pane two rows down. The selection
+            // has to behave like a stream inside the original pane.
+            co_await TouchGesture(page, left + 3, top + 1, false, left + paneWidth + 2, top + 3);
+            if (!control.HasSelection()) { throw hresult_error(E_FAIL, L"No selection after dragging across a tmux pane boundary"); }
+            InvokeTerminalMenuItem(control, L"TouchCopyItem");
+            co_await pause(page->Dispatcher());
+            if (copied != L"alpha\r\n中文 X\r\nend" || control.HasSelection())
+            {
+                throw hresult_error(E_FAIL, hstring{ L"Pane multiline selection returned unexpected text: " + std::wstring{ copied } });
+            }
+            co_await MouseRemote(server, "tmux select-layout -t " + target + " " + ::TmuxWorkspace::quoteShell(originalLayout));
         }
 
         static winrt::Windows::Foundation::IAsyncAction ProbePaneCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server,
@@ -548,6 +606,7 @@ namespace TerminalAppLocalTests
                 { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane in native mode"); }
                 const auto clipboardSequence = GetClipboardSequenceNumber();
                 co_await ProbeTouchCopy(page, server, a.id, a.left, a.top);
+                co_await ProbeMultilinePaneSelection(page, server, session, a.id, b.id);
                 co_await ProbePaneCopy(page, server, session, b.id, a.id, column(b), row(b));
                 if (GetClipboardSequenceNumber() != clipboardSequence)
                 {
@@ -873,6 +932,7 @@ namespace TerminalAppLocalTests
                     note("TOUCH: Windows touch gestures passed in Native, Compatibility and Off; swiping did not switch pane");
                     note("COPY: long press and drag selected terminal output; the visible Copy action produced the exact text");
                     note("PANE COPY: terminal long press copied the pointed inactive pane and cleared selection highlighting");
+                    note("PANE SELECTION: multiline drag copied only the original pane and preserved Unicode");
                 }
                 co_await MouseRemote(*server, restorePane);
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }

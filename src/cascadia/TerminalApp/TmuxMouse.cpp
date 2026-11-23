@@ -6,6 +6,7 @@
 #include <json/json.h>
 #include <deque>
 #include <cmath>
+#include <sstream>
 
 using namespace winrt;
 using namespace winrt::Windows::UI::Xaml;
@@ -135,6 +136,12 @@ namespace winrt::TerminalApp::implementation
         if (const auto found = _tmuxMouseHandlers.find(id); found != _tmuxMouseHandlers.end() && found->second.get() == control) { return; }
         _tmuxMouseHandlers.insert_or_assign(id, make_weak(control));
         control.PaneCopyEnabled(true);
+        control.PaneSelectionBoundsRequested([weak = get_weak()](const IInspectable& sender, const winrt::Microsoft::Terminal::Core::Point& cell) {
+            if (const auto page = weak.get(); page && page->_tmuxAlive)
+            {
+                if (const auto target = sender.try_as<TermControl>()) { page->_TmuxSetPaneSelectionBounds(target, cell.X, cell.Y); }
+            }
+        });
         control.PaneCopyRequested([weak = get_weak()](const IInspectable& sender, const winrt::Microsoft::Terminal::Core::Point& cell) {
             if (const auto page = weak.get(); page && page->_tmuxAlive)
             {
@@ -155,6 +162,43 @@ namespace winrt::TerminalApp::implementation
             }
         } };
         control.AddHandler(UIElement::TappedEvent(), box_value(onTap), true);
+    }
+
+    safe_void_coroutine TerminalPage::_TmuxSetPaneSelectionBounds(TermControl control, int column, int row)
+    {
+        if (_tmuxDialogOpen || _GetActiveControl() != control || control.ConnectionState() != ConnectionState::Connected)
+        {
+            co_return;
+        }
+        const auto context = get_self<ContentManager>(_manager)->GetTmuxContext(control.ContentId());
+        if (!context || !context->session) { co_return; }
+
+        const auto lifetime = get_strong();
+        const auto dispatcher = Dispatcher();
+        const auto revision = control.PaneSelectionRevision();
+        const auto generation = _tmuxGeneration;
+        const auto connection = control.Connection();
+        const auto cancellation = _tmuxCancellation;
+        int left{}, top{}, width{}, height{};
+        bool found{};
+        co_await resume_background();
+        try
+        {
+            const auto result = ::TmuxWorkspace::runSsh(context->server, ::TmuxWorkspace::paneBoundsAtCommand(*context->session, column, row), cancellation);
+            std::istringstream output{ result.output };
+            found = result.exitCode == 0 && (output >> left >> top >> width >> height) &&
+                    left >= 0 && top >= 0 && width > 0 && height > 0 && width <= 32767 && height <= 32767 &&
+                    column >= left && row >= top && column - left < width && row - top < height;
+        }
+        catch (...) {}
+        co_await resume_foreground(dispatcher);
+        if (_tmuxAlive && generation == _tmuxGeneration && control.Connection() == connection)
+        {
+            const auto bounds = found && _GetActiveControl() == control ? Windows::Foundation::Rect{ static_cast<float>(left), static_cast<float>(top),
+                                                                    static_cast<float>(width), static_cast<float>(height) } :
+                                        Windows::Foundation::Rect{};
+            control.SetPaneSelectionBounds(revision, bounds);
+        }
     }
 
     void TerminalPage::_TmuxMousePointer(const TermControl& control, const Input::PointerRoutedEventArgs& args)
