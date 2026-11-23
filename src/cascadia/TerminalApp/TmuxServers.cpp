@@ -93,6 +93,10 @@ namespace winrt::TerminalApp::implementation
         const auto submit = [&]() {
             if (!dialog.IsPrimaryButtonEnabled()) { return; }
             if (dialog.Name() == L"TmuxTranslationDialog") { _TmuxTranslateSubmit(); }
+            else if (dialog.Name() == L"TmuxPaneCopyDialog")
+            {
+                if (_TmuxCommitPaneCopy()) { finish(ContentDialogResult::Primary); }
+            }
             else { finish(ContentDialogResult::Primary); }
         };
         auto accept = TmuxInputPrimary().Click(auto_revoke, [&](auto&&, auto&&) { submit(); });
@@ -111,6 +115,7 @@ namespace winrt::TerminalApp::implementation
         if (dialog.Name() == L"TmuxNewSessionDialog") { TmuxNewSessionName().Focus(FocusState::Programmatic); }
         else if (dialog.Name() == L"TmuxAddServerDialog") { TmuxSshCommand().Focus(FocusState::Programmatic); }
         else if (dialog.Name() == L"TmuxTranslationDialog") { TmuxTranslationText().Focus(FocusState::Programmatic); }
+        else if (dialog.Name() == L"TmuxPaneCopyDialog") { TmuxInputClose().Focus(FocusState::Programmatic); }
         else { TmuxTheme().Focus(FocusState::Programmatic); }
         co_await resume_on_signal(completed.get());
         co_await resume_foreground(dispatcher);

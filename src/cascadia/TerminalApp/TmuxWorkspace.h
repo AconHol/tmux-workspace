@@ -228,6 +228,13 @@ namespace TmuxWorkspace
                " mouse " + (mode == MouseMode::Native ? "on" : "off");
     }
 
+    inline std::string captureActivePaneCommand(const Session& session)
+    {
+        // The trailing colon targets this session's current window and its
+        // active pane even when a different session is attached elsewhere.
+        return sessionGuard(session) + "exec tmux capture-pane -p -S -500 -t " + quoteShell(session.id + ":");
+    }
+
     inline std::string attachCommand(const Session& session, MouseMode mode = MouseMode::Native)
     {
         return mouseCommand(session, mode) + " || exit $?; exec tmux attach-session -t " + quoteShell("=" + session.id);

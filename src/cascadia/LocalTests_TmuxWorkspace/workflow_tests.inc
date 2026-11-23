@@ -342,7 +342,8 @@ namespace TerminalAppLocalTests
         }
 
         static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false,
-                                                                   std::optional<int> holdToColumn = std::nullopt)
+                                                                   std::optional<int> holdToColumn = std::nullopt,
+                                                                   winrt::Windows::UI::Xaml::FrameworkElement surface = nullptr)
         {
             using namespace winrt;
             const auto control = page->_GetActiveControl();
@@ -351,7 +352,9 @@ namespace TerminalAppLocalTests
             const auto core = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core();
             const auto font = core.FontSizeInDips();
             const auto hwnd = *page->_hostingHwnd;
-            const auto origin = panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
+            const auto origin = surface ?
+                surface.TransformToVisual(nullptr).TransformPoint({ static_cast<float>(surface.ActualWidth() / 2), static_cast<float>(surface.ActualHeight() / 2) }) :
+                panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
             const auto scale = GetDpiForWindow(hwnd) / 96.0f;
             POINT location{ static_cast<LONG>(std::lround(origin.X * scale)), static_cast<LONG>(std::lround(origin.Y * scale)) };
             check_bool(ClientToScreen(hwnd, &location));
@@ -442,6 +445,67 @@ namespace TerminalAppLocalTests
             get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core().ClearSelection();
         }
 
+        static winrt::Windows::Foundation::IAsyncAction ProbePaneCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, std::string active, std::string other)
+        {
+            using namespace winrt;
+            using namespace winrt::Windows::UI::Xaml;
+            const auto send = [](const std::string& pane, const std::string& command) {
+                const auto target = ::TmuxWorkspace::quoteShell(pane);
+                return "tmux send-keys -t " + target + " C-u; tmux send-keys -t " + target + " -l -- " +
+                    ::TmuxWorkspace::quoteShell(command) + "; tmux send-keys -t " + target + " Enter";
+            };
+            co_await MouseRemote(server, send(active, "printf '\\103OPY_PANE_A1\\n\\n\\103OPY_PANE_A2\\n'") +
+                                        "; " + send(other, "printf '\\103OPY_PANE_B\\n'"));
+            co_await pause(page->Dispatcher());
+            const auto otherText = co_await MouseRemote(server, "tmux capture-pane -p -t " + ::TmuxWorkspace::quoteShell(other));
+            if (std::wstring_view{ otherText }.find(L"COPY_PANE_B") == std::wstring_view::npos)
+            {
+                throw hresult_error(E_FAIL, L"Missing text in the other split pane");
+            }
+
+            const auto previous = page->DialogPresenter();
+            auto restore = wil::scope_exit([&]() noexcept {
+                if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
+                page->DialogPresenter(previous);
+            });
+            auto dialog = make_self<WorkflowLiveDialog>();
+            dialog->page = page;
+            dialog->opened = [](auto) {};
+            page->DialogPresenter(dialog.as<winrt::TerminalApp::IDialogPresenter>());
+            const auto button = page->TmuxWorkspaceView().IsPaneOpen() ? page->TmuxCopyPaneButton() : page->TmuxRailCopyPane();
+            co_await TouchGesture(page, 0, 0, false, std::nullopt, button);
+            for (int i = 0; !page->TmuxPaneCopyDialog().IsPrimaryButtonEnabled() && i < 40; ++i) { co_await pause(page->Dispatcher()); }
+            const auto all = page->_TmuxPaneCopyText();
+            const std::wstring_view allText{ all };
+            if (page->TmuxInputLayer().Visibility() != Visibility::Visible ||
+                allText.find(L"COPY_PANE_A1\r\n\r\nCOPY_PANE_A2") == std::wstring_view::npos ||
+                allText.find(L"COPY_PANE_B") != std::wstring_view::npos)
+            {
+                throw hresult_error(E_FAIL, L"The preview did not isolate the active pane's output");
+            }
+            const auto list = page->TmuxPaneCopyList();
+            for (const auto expected : { L"COPY_PANE_A1", L"COPY_PANE_A2" })
+            {
+                const auto& lines = page->_tmuxPaneCopyLines;
+                const auto match = std::find(lines.begin(), lines.end(), expected);
+                if (match == lines.end()) { throw hresult_error(E_FAIL, L"Copy test line is missing"); }
+                const auto item = list.Items().GetAt(static_cast<uint32_t>(match - lines.begin())).as<FrameworkElement>();
+                list.ScrollIntoView(item);
+                co_await pause(page->Dispatcher());
+                co_await TouchGesture(page, 0, 0, false, std::nullopt, item);
+            }
+            if (page->_TmuxPaneCopyText() != L"COPY_PANE_A1\r\n\r\nCOPY_PANE_A2" ||
+                page->TmuxPaneCopyDialog().PrimaryButtonText() != L"复制选中行")
+            {
+                throw hresult_error(E_FAIL, L"Two touch taps did not select exactly the requested lines");
+            }
+            co_await TouchGesture(page, 0, 0, false, std::nullopt, page->TmuxInputPrimary());
+            if (page->_tmuxDialogOpen || page->TmuxStatus().Text() != L"已复制当前窗格的文字")
+            {
+                throw hresult_error(E_FAIL, L"The pane copy button did not commit the selected text");
+            }
+        }
+
         static winrt::Windows::Foundation::IAsyncAction ProbeMouseModes(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, ::TmuxWorkspace::Session session)
         {
             using namespace winrt;
@@ -488,6 +552,7 @@ namespace TerminalAppLocalTests
                 if (!to_string(co_await MouseRemote(server, active)).starts_with(a.id + "\n"))
                 { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane in native mode"); }
                 co_await ProbeTouchCopy(page, server, a.id, a.left, a.top);
+                co_await ProbePaneCopy(page, server, a.id, b.id);
             }
 
             co_await SetMouseMode(page, Mode::Compatibility);
@@ -806,6 +871,7 @@ namespace TerminalAppLocalTests
                 {
                     note("TOUCH: Windows touch gestures passed in Native, Compatibility and Off; swiping did not switch pane");
                     note("COPY: long press and drag selected terminal output; the visible Copy action produced the exact text");
+                    note("PANE COPY: two touch taps selected the requested rows; the other split pane was excluded");
                 }
                 co_await MouseRemote(*server, restorePane);
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }

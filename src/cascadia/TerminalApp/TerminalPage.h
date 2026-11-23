@@ -256,6 +256,17 @@ namespace winrt::TerminalApp::implementation
         winrt::weak_ref<winrt::Microsoft::Terminal::Control::TermControl> _tmuxTranslationTarget;
         std::shared_ptr<std::atomic_bool> _tmuxTranslationCancellation;
         void _TmuxUpdateTools();
+        std::vector<winrt::hstring> _tmuxPaneCopyLines;
+        std::optional<uint32_t> _tmuxPaneCopyStart;
+        std::optional<uint32_t> _tmuxPaneCopyEnd;
+        std::shared_ptr<std::atomic_bool> _tmuxPaneCopyCancellation;
+        safe_void_coroutine _TmuxCopyPaneClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
+        safe_void_coroutine _TmuxLoadPaneCopy(::TmuxWorkspace::TabContext context, std::shared_ptr<std::atomic_bool> cancelled);
+        void _TmuxPaneCopyLineClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::Controls::ItemClickEventArgs&);
+        void _TmuxPaneCopyClearClicked(const Windows::Foundation::IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
+        void _TmuxUpdatePaneCopyRange();
+        winrt::hstring _TmuxPaneCopyText() const;
+        bool _TmuxCommitPaneCopy();
         safe_void_coroutine _TmuxActionClicked(Windows::Foundation::IInspectable sender, Windows::UI::Xaml::RoutedEventArgs);
         safe_void_coroutine _TmuxTranslateClicked(Windows::Foundation::IInspectable, Windows::UI::Xaml::RoutedEventArgs);
         safe_void_coroutine _TmuxTranslateSubmit();

@@ -224,6 +224,7 @@ namespace winrt::TerminalApp::implementation
         state->clicks.push_back({ column, row, {} });
         state->core.BeginInputBuffering();
         _tmuxMouseFocusRequests.emplace(id, state);
+        _TmuxUpdateTools();
         _TmuxRunMouseFocus(std::move(state));
     }
 
@@ -274,6 +275,7 @@ namespace winrt::TerminalApp::implementation
             TmuxMouseProblem().IsOpen(true);
         }
         _tmuxMouseFocusRequests.erase(state->id);
+        _TmuxUpdateTools();
     }
 
     void TerminalPage::_TmuxCopyMouseInputClicked(const IInspectable&, const RoutedEventArgs&)

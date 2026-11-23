@@ -174,6 +174,13 @@
                                     </Button>
                                     <Button Grid.Row="2" Grid.Column="1" Click="_TmuxTranslateClicked" HorizontalAlignment="Stretch" Margin="3,0,0,0" Content="AI 翻译" ToolTipService.ToolTip="翻译文字并填入当前终端" />
                                 </Grid>
+                                <Button x:Name="TmuxCopyPaneButton" Click="_TmuxCopyPaneClicked" MinHeight="40"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <SymbolIcon Symbol="Copy" />
+                                        <TextBlock Text="复制当前窗格" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
                             </UserControl>
                             <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Style="{ThemeResource TmuxSubtleButtonStyle}"
@@ -213,6 +220,10 @@
                                             <MenuFlyoutItem Text="查看滚动历史" Tag="copy-mode" Click="_TmuxActionClicked" />
                                         </MenuFlyout>
                                     </Button.Flyout>
+                                </Button>
+                                <Button x:Name="TmuxRailCopyPane" Width="40" Height="40" Margin="4" Click="_TmuxCopyPaneClicked" IsEnabled="False"
+                                        Style="{ThemeResource TmuxSubtleButtonStyle}" AutomationProperties.Name="复制当前窗格" ToolTipService.ToolTip="复制当前窗格">
+                                    <SymbolIcon Symbol="Copy" />
                                 </Button>
                                 <Button x:Name="TmuxRailTranslate" Width="40" Height="40" Margin="4" Click="_TmuxTranslateClicked" IsEnabled="False"
                                         Style="{ThemeResource TmuxSubtleButtonStyle}" AutomationProperties.Name="AI 翻译" ToolTipService.ToolTip="AI 翻译">
@@ -622,6 +633,19 @@
                 </mux:Expander>
                 <ProgressBar x:Name="TmuxTranslationProgress" IsIndeterminate="True" Visibility="Collapsed" />
                 <TextBlock x:Name="TmuxTranslationStatus" TextWrapping="Wrap" Style="{ThemeResource CaptionTextBlockStyle}" AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+        </ContentDialog>
+
+        <ContentDialog x:Name="TmuxPaneCopyDialog" Title="复制当前窗格" PrimaryButtonText="复制全部" CloseButtonText="关闭"
+                       Grid.Row="2" Grid.Column="1" IsPrimaryButtonEnabled="False">
+            <StackPanel MinWidth="260" Spacing="8">
+                <TextBlock x:Name="TmuxPaneCopyHint" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <ProgressBar x:Name="TmuxPaneCopyProgress" IsIndeterminate="True" Visibility="Collapsed" />
+                <ListView x:Name="TmuxPaneCopyList" Height="260" SelectionMode="None" IsItemClickEnabled="True"
+                          ItemClick="_TmuxPaneCopyLineClicked" AutomationProperties.Name="当前窗格的文字行"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                <Button x:Name="TmuxPaneCopyClear" MinHeight="40" Content="清除选区" IsEnabled="False" Click="_TmuxPaneCopyClearClicked" />
             </StackPanel>
         </ContentDialog>
 

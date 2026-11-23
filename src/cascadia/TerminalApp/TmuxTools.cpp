@@ -4,6 +4,10 @@
 #include "ContentManager.h"
 #include "TmuxAi.h"
 #include "SshCommandParser.h"
+#include "TmuxUiHelpers.h"
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Windows.UI.ViewManagement.h>
+#include <sstream>
 
 using namespace winrt;
 using namespace winrt::Windows::UI::Xaml;
@@ -28,6 +32,189 @@ namespace winrt::TerminalApp::implementation
         TmuxTools().IsEnabled(enabled);
         TmuxRailTools().IsEnabled(enabled);
         TmuxRailTranslate().IsEnabled(enabled);
+        const auto canCopy = enabled && !_tmuxDialogOpen && !_tmuxMouseFocusRequests.contains(control.ContentId());
+        TmuxCopyPaneButton().IsEnabled(canCopy);
+        TmuxRailCopyPane().IsEnabled(canCopy);
+    }
+
+    safe_void_coroutine TerminalPage::_TmuxCopyPaneClicked(IInspectable, RoutedEventArgs)
+    {
+        const auto control = _GetActiveControl();
+        if (_tmuxDialogOpen || _tmuxActionBusy || !control || control.ConnectionState() != ConnectionState::Connected ||
+            _tmuxMouseFocusRequests.contains(control.ContentId()))
+        {
+            co_return;
+        }
+        const auto context = get_self<ContentManager>(_manager)->GetTmuxContext(control.ContentId());
+        if (!context || !context->session) { co_return; }
+
+        const auto lifetime = get_strong();
+        const auto cancelled = _tmuxPaneCopyCancellation = std::make_shared<std::atomic_bool>(false);
+        _tmuxDialogOpen = true;
+        _TmuxUpdateTools();
+        auto reset = wil::scope_exit([&]() noexcept {
+            cancelled->store(true);
+            _tmuxPaneCopyCancellation.reset();
+            _tmuxDialogOpen = false;
+            try
+            {
+                TmuxPaneCopyList().Items().Clear();
+                _tmuxPaneCopyLines.clear();
+                _tmuxPaneCopyStart.reset();
+                _tmuxPaneCopyEnd.reset();
+                if (_tmuxAlive) { _TmuxUpdateTools(); }
+            }
+            CATCH_LOG();
+        });
+        TmuxPaneCopyHint().Text(L"正在读取当前窗格…");
+        TmuxPaneCopyProgress().Visibility(Visibility::Visible);
+        TmuxPaneCopyClear().IsEnabled(false);
+        TmuxPaneCopyDialog().PrimaryButtonText(L"复制全部");
+        TmuxPaneCopyDialog().IsPrimaryButtonEnabled(false);
+        _TmuxLoadPaneCopy(*context, cancelled);
+        co_await _ShowDialogHelper(L"TmuxPaneCopyDialog");
+    }
+
+    safe_void_coroutine TerminalPage::_TmuxLoadPaneCopy(::TmuxWorkspace::TabContext context, std::shared_ptr<std::atomic_bool> cancelled)
+    {
+        const auto lifetime = get_strong();
+        const auto dispatcher = Dispatcher();
+        std::vector<hstring> lines;
+        bool failed{};
+        co_await resume_background();
+        try
+        {
+            const auto result = ::TmuxWorkspace::runSsh(context.server, ::TmuxWorkspace::captureActivePaneCommand(*context.session), cancelled);
+            failed = result.exitCode != 0;
+            if (!failed)
+            {
+                std::istringstream stream{ result.output };
+                std::string line;
+                while (std::getline(stream, line))
+                {
+                    if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+                    lines.push_back(to_hstring(line));
+                }
+                // Drop the blank area below the last line of output. Blank
+                // lines between output lines still belong to the snapshot.
+                while (!lines.empty() && lines.back().empty()) { lines.pop_back(); }
+            }
+        }
+        catch (...) { failed = true; }
+        co_await resume_foreground(dispatcher);
+        if (!_tmuxAlive || cancelled->load() || _tmuxPaneCopyCancellation != cancelled) { co_return; }
+        TmuxPaneCopyProgress().Visibility(Visibility::Collapsed);
+        if (failed || lines.empty())
+        {
+            TmuxPaneCopyHint().Text(failed ? L"无法读取窗格。请关闭面板，确认连接后重试。" : L"当前窗格没有可复制的文字。");
+            co_return;
+        }
+
+        _tmuxPaneCopyLines = std::move(lines);
+        const auto items = TmuxPaneCopyList().Items();
+        for (uint32_t i = 0; i < _tmuxPaneCopyLines.size(); ++i)
+        {
+            const auto& line = _tmuxPaneCopyLines[i];
+            const auto tag = box_value(i);
+            TextBlock text;
+            text.Text(line);
+            text.FontFamily(Media::FontFamily{ L"Cascadia Mono, Consolas" });
+            text.TextWrapping(TextWrapping::Wrap);
+            text.Tag(tag);
+            ListViewItem item;
+            item.MinHeight(40);
+            item.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            item.Content(text);
+            item.Tag(tag);
+            Automation::AutomationProperties::SetName(item, L"第 " + std::to_wstring(i + 1) + L" 行 " + std::wstring{ line });
+            items.Append(item);
+        }
+        TmuxPaneCopyDialog().IsPrimaryButtonEnabled(true);
+        _TmuxUpdatePaneCopyRange();
+        TmuxPaneCopyList().ScrollIntoView(items.GetAt(items.Size() - 1));
+    }
+
+    void TerminalPage::_TmuxPaneCopyLineClicked(const IInspectable&, const ItemClickEventArgs& args)
+    {
+        if (!_tmuxPaneCopyCancellation) { return; }
+        const auto index = unbox_value_or<uint32_t>(::TmuxWorkspace::clickedRowTag(args.ClickedItem()), UINT32_MAX);
+        if (index >= _tmuxPaneCopyLines.size()) { return; }
+        if (!_tmuxPaneCopyStart || _tmuxPaneCopyEnd)
+        {
+            _tmuxPaneCopyStart = index;
+            _tmuxPaneCopyEnd.reset();
+        }
+        else { _tmuxPaneCopyEnd = index; }
+        _TmuxUpdatePaneCopyRange();
+    }
+
+    void TerminalPage::_TmuxPaneCopyClearClicked(const IInspectable&, const RoutedEventArgs&)
+    {
+        _tmuxPaneCopyStart.reset();
+        _tmuxPaneCopyEnd.reset();
+        _TmuxUpdatePaneCopyRange();
+    }
+
+    void TerminalPage::_TmuxUpdatePaneCopyRange()
+    {
+        const auto selected = _tmuxPaneCopyStart.has_value();
+        const auto start = _tmuxPaneCopyStart.value_or(0);
+        const auto end = _tmuxPaneCopyEnd.value_or(start);
+        const auto [first, last] = std::minmax(start, end);
+        const auto items = TmuxPaneCopyList().Items();
+        Media::SolidColorBrush highlight{
+            Windows::UI::ViewManagement::UISettings().GetColorValue(Windows::UI::ViewManagement::UIColorType::Accent)
+        };
+        highlight.Opacity(0.26);
+        for (uint32_t i = 0; i < items.Size(); ++i)
+        {
+            items.GetAt(i).as<ListViewItem>().Background(selected && i >= first && i <= last ? highlight : nullptr);
+        }
+        TmuxPaneCopyClear().IsEnabled(selected);
+        TmuxPaneCopyDialog().PrimaryButtonText(selected ? L"复制选中行" : L"复制全部");
+        if (!selected) { TmuxPaneCopyHint().Text(L"可复制全部，或点起始行，再点结束行。"); }
+        else if (!_tmuxPaneCopyEnd) { TmuxPaneCopyHint().Text(L"已选第 " + std::to_wstring(start + 1) + L" 行。再点一行可以选取范围。"); }
+        else { TmuxPaneCopyHint().Text(L"已选第 " + std::to_wstring(first + 1) + L" 至 " + std::to_wstring(last + 1) + L" 行。"); }
+    }
+
+    hstring TerminalPage::_TmuxPaneCopyText() const
+    {
+        if (_tmuxPaneCopyLines.empty()) { return {}; }
+        const auto start = _tmuxPaneCopyStart.value_or(0);
+        const auto end = _tmuxPaneCopyEnd.value_or(_tmuxPaneCopyStart.value_or(static_cast<uint32_t>(_tmuxPaneCopyLines.size() - 1)));
+        const auto [first, last] = std::minmax(start, end);
+        std::wstring text;
+        for (uint32_t i = first; i <= last; ++i)
+        {
+            if (i != first) { text += L"\r\n"; }
+            text += _tmuxPaneCopyLines[i];
+        }
+        return hstring{ text };
+    }
+
+    bool TerminalPage::_TmuxCommitPaneCopy()
+    {
+        if (_tmuxPaneCopyLines.empty()) { return false; }
+        try
+        {
+            const auto text = _TmuxPaneCopyText();
+#ifdef TMUX_WORKFLOW_TESTS
+            if (!GetEnvironmentVariableW(L"TMUX_WORKFLOW_TOUCH_INPUT", nullptr, 0))
+#endif
+            {
+                Windows::ApplicationModel::DataTransfer::DataPackage data;
+                data.SetText(text);
+                Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(data);
+                Windows::ApplicationModel::DataTransfer::Clipboard::Flush();
+            }
+            TmuxStatus().Text(L"已复制当前窗格的文字");
+            return true;
+        }
+        catch (...)
+        {
+            TmuxPaneCopyHint().Text(L"剪贴板暂时无法写入，请再点一次复制。");
+            return false;
+        }
     }
 
     safe_void_coroutine TerminalPage::_TmuxActionClicked(Windows::Foundation::IInspectable sender, RoutedEventArgs)
