@@ -4,7 +4,9 @@
 #include "TerminalPaneContent.h"
 #include "SshCommandParser.h"
 #include "TmuxUiHelpers.h"
+#include <BackgroundImageUri.h>
 #include <cmath>
+#include <winrt/Windows.Storage.Streams.h>
 
 using namespace winrt;
 using namespace winrt::Windows::UI::Xaml;
@@ -423,16 +425,28 @@ namespace winrt::TerminalApp::implementation
                                   name == L"dark" ? hstring{ L"深色" } : name;
             appendCombo(TmuxTheme(), label, name, name == currentTheme);
         }
+        constexpr std::wstring_view defaultDarkScheme{ L"Campbell" };
+        constexpr std::wstring_view defaultLightScheme{ L"One Half Light" };
+        const auto darkScheme = appearance.DarkColorSchemeName();
+        const auto lightScheme = appearance.LightColorSchemeName();
+        const bool followsTheme = darkScheme == defaultDarkScheme && lightScheme == defaultLightScheme;
+        const bool usesSeparateSchemes = darkScheme != lightScheme;
         TmuxColorScheme().Items().Clear();
+        appendCombo(TmuxColorScheme(), L"跟随应用主题", {}, followsTheme);
+        if (usesSeparateSchemes && !followsTheme)
+        {
+            appendCombo(TmuxColorScheme(), L"保留现有浅色与深色配色", {}, true);
+        }
         for (const auto& scheme : _settings.GlobalSettings().ColorSchemes())
         {
-            appendCombo(TmuxColorScheme(), scheme.Key(), scheme.Key(), scheme.Key() == appearance.DarkColorSchemeName());
+            appendCombo(TmuxColorScheme(), scheme.Key(), scheme.Key(), !usesSeparateSchemes && scheme.Key() == darkScheme);
         }
         TmuxFontFace().Text(profile.FontInfo().FontFace());
         TmuxFontSize().Value(profile.FontInfo().FontSize());
         TmuxAcrylic().IsOn(appearance.UseAcrylic());
         TmuxMouseMode().SelectedIndex(static_cast<int>(_tmuxMouseMode));
         TmuxOpacity().Value(appearance.Opacity() * 100.0);
+        TmuxImageOpacity().Value(appearance.BackgroundImageOpacity() * 100.0);
         TmuxBackgroundImage().Text(appearance.BackgroundImagePath().Path());
         TmuxPersonalizationError().Text(L"");
         while (co_await _ShowDialogHelper(L"TmuxPersonalizationDialog") == ContentDialogResult::Primary)
@@ -449,9 +463,18 @@ namespace winrt::TerminalApp::implementation
                 const auto target = settings.GetProfileForArgs(NewTerminalArgs{});
                 const auto targetAppearance = target.DefaultAppearance();
                 const auto theme = selectedTag(TmuxTheme());
-                if (!theme.empty()) { settings.GlobalSettings().Theme(ThemePair{ theme }); }
+                const bool themeChanged = !theme.empty() && theme != currentTheme;
+                if (themeChanged) { settings.GlobalSettings().Theme(ThemePair{ theme }); }
                 const auto scheme = selectedTag(TmuxColorScheme());
-                if (!scheme.empty())
+                // The previous workspace settings panel wrote Campbell to both themes.
+                // Switch that pair to theme-aware colors when the user changes themes.
+                if (TmuxColorScheme().SelectedIndex() == 0 ||
+                    (themeChanged && scheme == defaultDarkScheme && darkScheme == defaultDarkScheme && lightScheme == defaultDarkScheme))
+                {
+                    targetAppearance.DarkColorSchemeName(hstring{ defaultDarkScheme });
+                    targetAppearance.LightColorSchemeName(hstring{ defaultLightScheme });
+                }
+                else if (!scheme.empty())
                 {
                     targetAppearance.DarkColorSchemeName(scheme);
                     targetAppearance.LightColorSchemeName(scheme);
@@ -461,10 +484,42 @@ namespace winrt::TerminalApp::implementation
                 target.FontInfo().FontSize(static_cast<float>(fontSize));
                 targetAppearance.UseAcrylic(TmuxAcrylic().IsOn());
                 targetAppearance.Opacity(static_cast<float>(TmuxOpacity().Value() / 100.0));
-                targetAppearance.BackgroundImagePath(MediaResourceHelper::FromString(TmuxBackgroundImage().Text()));
+                targetAppearance.BackgroundImageOpacity(static_cast<float>(TmuxImageOpacity().Value() / 100.0));
+                auto imagePath = ::TmuxWorkspace::trimSsh(TmuxBackgroundImage().Text());
+                if (imagePath.size() >= 2 && imagePath.front() == L'"' && imagePath.back() == L'"')
+                {
+                    imagePath = imagePath.substr(1, imagePath.size() - 2);
+                }
+                const auto image = MediaResourceHelper::FromString(hstring{ imagePath });
+                targetAppearance.BackgroundImagePath(image);
                 settings.ResolveMediaResources();
-                _TmuxSaveMouseMode(static_cast<::TmuxWorkspace::MouseMode>(std::clamp(TmuxMouseMode().SelectedIndex(), 0, 2)));
+                if (!imagePath.empty() && imagePath != appearance.BackgroundImagePath().Path() &&
+                    !til::equals_insensitive_ascii(imagePath, L"none"))
+                {
+                    try
+                    {
+                        const auto resolved = image.Resolved();
+                        if (!image.Ok() || resolved.empty())
+                        {
+                            throw hresult_invalid_argument{};
+                        }
+                        const auto uri = ::Microsoft::Terminal::UI::BackgroundImageUri(resolved);
+                        const auto openFile = uri.SchemeName() == L"file" ?
+                                                  Windows::Storage::StorageFile::GetFileFromPathAsync(resolved) :
+                                                  Windows::Storage::StorageFile::GetFileFromApplicationUriAsync(uri);
+                        const auto file = co_await openFile;
+                        const auto stream = co_await file.OpenAsync(Windows::Storage::FileAccessMode::Read);
+                        Windows::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+                        co_await bitmap.SetSourceAsync(stream);
+                    }
+                    catch (...)
+                    {
+                        TmuxPersonalizationError().Text(L"找不到或无法读取背景图片，请重新选择。");
+                        continue;
+                    }
+                }
                 if (!settings.WriteSettingsToDisk()) { throw std::runtime_error("Settings could not be saved"); }
+                _TmuxSaveMouseMode(static_cast<::TmuxWorkspace::MouseMode>(std::clamp(TmuxMouseMode().SelectedIndex(), 0, 2)));
                 SetSettings(settings, true);
                 co_return;
             }
@@ -475,19 +530,27 @@ namespace winrt::TerminalApp::implementation
     safe_void_coroutine TerminalPage::_TmuxBrowseBackgroundClicked(Windows::Foundation::IInspectable, RoutedEventArgs)
     {
         const auto lifetime = get_strong();
-        Windows::Storage::Pickers::FileOpenPicker picker;
-        picker.FileTypeFilter().Append(L".png");
-        picker.FileTypeFilter().Append(L".jpg");
-        picker.FileTypeFilter().Append(L".jpeg");
-        picker.FileTypeFilter().Append(L".bmp");
-        picker.FileTypeFilter().Append(L".gif");
-        if (_hostingHwnd)
+        try
         {
-            THROW_IF_FAILED(picker.as<::IInitializeWithWindow>()->Initialize(*_hostingHwnd));
+            Windows::Storage::Pickers::FileOpenPicker picker;
+            picker.FileTypeFilter().Append(L".png");
+            picker.FileTypeFilter().Append(L".jpg");
+            picker.FileTypeFilter().Append(L".jpeg");
+            picker.FileTypeFilter().Append(L".bmp");
+            picker.FileTypeFilter().Append(L".gif");
+            if (_hostingHwnd)
+            {
+                THROW_IF_FAILED(picker.as<::IInitializeWithWindow>()->Initialize(*_hostingHwnd));
+            }
+            if (const auto file = co_await picker.PickSingleFileAsync())
+            {
+                TmuxBackgroundImage().Text(file.Path());
+                TmuxPersonalizationError().Text(L"");
+            }
         }
-        if (const auto file = co_await picker.PickSingleFileAsync())
+        catch (...)
         {
-            TmuxBackgroundImage().Text(file.Path());
+            TmuxPersonalizationError().Text(L"无法打开图片选择器，可以直接输入图片路径。");
         }
     }
 }

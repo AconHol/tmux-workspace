@@ -392,6 +392,8 @@
                     <StackPanel Spacing="8">
                         <TextBox x:Name="TmuxBackgroundImage" Header="终端背景图片" PlaceholderText="不使用背景图片" />
                         <Button Content="选择图片" Click="_TmuxBrowseBackgroundClicked" />
+                        <Slider x:Name="TmuxImageOpacity" Header="图片不透明度" Minimum="0" Maximum="100"
+                                StepFrequency="1" AutomationProperties.Name="图片不透明度" />
                     </StackPanel>
                     <TextBlock x:Name="TmuxPersonalizationError" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                                TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />

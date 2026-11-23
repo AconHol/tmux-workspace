@@ -36,11 +36,13 @@ namespace TerminalAppLocalTests
     struct WorkflowDialogs : winrt::implements<WorkflowDialogs, winrt::TerminalApp::IDialogPresenter>
     {
         std::function<void(winrt::Windows::UI::Xaml::Controls::ContentDialog)> prepare;
+        bool cancel{};
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> ShowDialog(
             winrt::Windows::UI::Xaml::Controls::ContentDialog dialog)
         {
             if (prepare) { prepare(dialog); }
-            co_return winrt::Windows::UI::Xaml::Controls::ContentDialogResult::Primary;
+            using winrt::Windows::UI::Xaml::Controls::ContentDialogResult;
+            co_return cancel ? ContentDialogResult::None : ContentDialogResult::Primary;
         }
     };
 
@@ -939,10 +941,38 @@ namespace TerminalAppLocalTests
                 note("MOUSE: native pointer focus, compatibility with mouse off, rapid-click input routing, top status bars, zoom, failure recovery, saved settings and reconnect passed");
                 note("WHEEL: native VT scroll reached the pointed tmux pane");
 
+                const auto imagePath = std::filesystem::path{ report }.parent_path() / L"背景 # 50%.bmp";
+                {
+                    const DWORD pixels[]{ 0xff226688, 0xff884422 };
+                    const DWORD offset = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+                    const BITMAPFILEHEADER header{ 0x4d42, offset + sizeof(pixels), 0, 0, offset };
+                    const BITMAPINFOHEADER info{ sizeof(BITMAPINFOHEADER), 2, 1, 1, 32, BI_RGB };
+                    std::ofstream file{ imagePath, std::ios::binary };
+                    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+                    file.write(reinterpret_cast<const char*>(&info), sizeof(info));
+                    file.write(reinterpret_cast<const char*>(pixels), sizeof(pixels));
+                    require(file.good(), "Cannot write the background image fixture");
+                }
                 dialogs->prepare = [&](ContentDialog dialog) {
                     require(dialog == page->TmuxPersonalizationDialog(), "Unexpected personalization dialog");
+                    if (!page->TmuxPersonalizationError().Text().empty())
+                    {
+                        dialogs->cancel = true;
+                        return;
+                    }
+                    for (const auto& item : page->TmuxTheme().Items())
+                    {
+                        if (unbox_value<hstring>(item.as<ComboBoxItem>().Tag()) == L"light")
+                        {
+                            page->TmuxTheme().SelectedItem(item);
+                            break;
+                        }
+                    }
+                    page->TmuxColorScheme().SelectedIndex(0);
                     page->TmuxAcrylic().IsOn(false);
                     page->TmuxOpacity().Value(60);
+                    page->TmuxImageOpacity().Value(35);
+                    page->TmuxBackgroundImage().Text(hstring{ L"\"" + imagePath.wstring() + L"\"" });
                 };
                 page->DialogPresenter(dialogs.as<winrt::TerminalApp::IDialogPresenter>());
                 page->_TmuxPersonalizationClicked(nullptr, nullptr);
@@ -952,8 +982,21 @@ namespace TerminalAppLocalTests
                 require(opacity > 0.59f && opacity < 0.61f, "Personalization did not reach the running SSH terminal");
                 const auto sideOpacity = page->TmuxSidebar().Background().as<Media::SolidColorBrush>().Opacity();
                 require(sideOpacity > 0.59 && sideOpacity < 0.61, "Sidebar opacity did not update");
+                require(!dialogs->cancel && page->TmuxSidebar().ActualTheme() == ElementTheme::Light, "The running workspace did not switch to light theme");
+                const auto active = page->_GetActiveControl();
+                const auto core = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(active.ContentId()).Core();
+                require(til::color{ core.FocusedAppearance().DefaultBackground() }.r == 0xfa, "The open terminal did not switch to One Half Light");
+                const auto image = FindVisual(active, L"BackgroundImage").as<Image>();
+                const auto bitmap = image.Source().try_as<Media::Imaging::BitmapImage>();
+                require(bitmap != nullptr, "The open terminal did not receive a background image");
+                for (unsigned i = 0; bitmap.PixelWidth() == 0 && i < 30; ++i) { co_await pause(dispatcher); }
+                require(bitmap.PixelWidth() == 2 && image.Opacity() > 0.34 && image.Opacity() < 0.36, "The terminal did not decode the image at the requested opacity");
+                dialogs->prepare = [&](ContentDialog) { page->TmuxBackgroundImage().Text(L""); };
+                page->_TmuxPersonalizationClicked(nullptr, nullptr);
+                for (unsigned i = 0; page->_tmuxDialogOpen && i < 30; ++i) { co_await pause(dispatcher); }
+                require(image.Source() == nullptr, "Clearing the background image did not remove it from the open terminal");
                 VerifySidebarJoin(page);
-                note("APPEARANCE: saved opacity reached the running terminal and sidebar");
+                note("APPEARANCE: the running terminal and sidebar switched to light; background image with a quoted Unicode path decoded, changed opacity and cleared");
 
                 page->_TmuxOpenSession(first);
                 page->_FocusCurrentTab(false);

@@ -5,6 +5,7 @@
 #include "TermControl.h"
 
 #include <DefaultSettings.h>
+#include <BackgroundImageUri.h>
 #include <inputpaneinterop.h>
 
 #include "TermControlAutomationPeer.h"
@@ -1028,7 +1029,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         Windows::Foundation::Uri imageUri{ nullptr };
         try
         {
-            imageUri = Windows::Foundation::Uri{ newAppearance.BackgroundImage() };
+            imageUri = ::Microsoft::Terminal::UI::BackgroundImageUri(newAppearance.BackgroundImage());
         }
         catch (...)
         {

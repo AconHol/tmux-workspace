@@ -10,6 +10,7 @@
 #include <til/hash.h>
 #include <til/unicode.h>
 #include <Utils.h>
+#include <BackgroundImageUri.h>
 
 #include "../../types/inc/ColorFix.hpp"
 #include "../../types/inc/utils.hpp"
@@ -3977,7 +3978,7 @@ namespace winrt::TerminalApp::implementation
         Windows::Foundation::Uri imageUri{ nullptr };
         try
         {
-            imageUri = Windows::Foundation::Uri{ path };
+            imageUri = ::Microsoft::Terminal::UI::BackgroundImageUri(path);
         }
         catch (...)
         {
@@ -5014,6 +5015,16 @@ namespace winrt::TerminalApp::implementation
 
         const auto theme = _settings.GlobalSettings().CurrentTheme();
         auto requestedTheme{ theme.RequestedTheme() };
+        if (_tmuxWorkspaceEnabled)
+        {
+            // Saving workspace personalization refreshes this page before the
+            // host receives the settings file notification.
+            RequestedTheme(requestedTheme);
+            if (_tabRow)
+            {
+                _tabRow.RequestedTheme(requestedTheme);
+            }
+        }
 
         {
             _updatePaneResources(requestedTheme);
