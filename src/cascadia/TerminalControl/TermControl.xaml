@@ -33,8 +33,11 @@
              mc:Ignorable="d">
     <UserControl.Resources>
 
-        <MenuFlyout x:Name="TouchCopyMenu">
+        <MenuFlyout x:Name="TouchCopyMenu" Closed="_PaneContextClosed">
             <MenuFlyoutItem x:Name="TouchCopyItem" Click="_CopyCommandHandler">
+                <MenuFlyoutItem.Icon><SymbolIcon Symbol="Copy" /></MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem x:Name="CopyPaneContextItem" Text="复制此窗格" Click="_PaneCopyCommandHandler">
                 <MenuFlyoutItem.Icon><SymbolIcon Symbol="Copy" /></MenuFlyoutItem.Icon>
             </MenuFlyoutItem>
         </MenuFlyout>

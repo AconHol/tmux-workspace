@@ -1953,8 +1953,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - args: event data
     void TermControl::_TappedHandler(const IInspectable& /*sender*/, const TappedRoutedEventArgs& e)
     {
+        if (_IsClosing()) { return; }
         if (e.PointerDeviceType() == Windows::Devices::Input::PointerDeviceType::Touch)
         {
+            if (_core.HasSelection()) { _core.ClearSelection(); }
             // Normally TSF would be responsible for showing the touch keyboard, but it's buggy for us:
             // If you have focus on a TermControl and type on your physical keyboard then touching
             // the TermControl will not show the touch keyboard ever again unless you focus another app.
@@ -1963,6 +1965,53 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
 
         e.Handled(true);
+    }
+
+    std::optional<Core::Point> TermControl::_paneCopyCellAt(Windows::Foundation::Point position)
+    {
+        const auto panel = SwapChainPanel();
+        const auto font = _core.FontSizeInDips();
+        if (!_paneCopyEnabled || position.X < 0 || position.Y < 0 ||
+            position.X >= panel.ActualWidth() || position.Y >= panel.ActualHeight() ||
+            font.Width <= 0 || font.Height <= 0 ||
+            _core.ScrollOffset() < _core.BufferHeight() - _core.ViewHeight())
+        {
+            return std::nullopt;
+        }
+        return Core::Point{ static_cast<int>(position.X / font.Width), static_cast<int>(position.Y / font.Height) };
+    }
+
+    void TermControl::_showPaneContextMenu(Windows::Foundation::Point position)
+    {
+        const auto hasSelection = _core.HasSelection();
+        if (!hasSelection && !_paneContextCell) { return; }
+        TouchCopyItem().Text(CopyCommandButton().Label());
+        TouchCopyItem().Visibility(hasSelection ? Visibility::Visible : Visibility::Collapsed);
+        const auto copyPane = CopyPaneContextItem();
+        copyPane.Visibility(_paneContextCell ? Visibility::Visible : Visibility::Collapsed);
+        copyPane.Tag(_paneContextCell ? box_value(*_paneContextCell) : nullptr);
+        Controls::Primitives::FlyoutShowOptions options;
+        options.Position(position);
+        options.Placement(Controls::Primitives::FlyoutPlacementMode::Top);
+        TouchCopyMenu().ShowAt(*this, options);
+    }
+
+    void TermControl::_PaneContextClosed(const IInspectable&, const IInspectable&)
+    {
+        _paneContextCell.reset();
+        if (!_IsClosing() && _core.HasSelection()) { _core.ClearSelection(); }
+    }
+
+    void TermControl::_PaneCopyCommandHandler(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        const auto item = sender.try_as<Controls::MenuFlyoutItem>();
+        if (item && item.Tag() && !_IsClosing())
+        {
+            const auto cell = unbox_value<Core::Point>(item.Tag());
+            if (_core.HasSelection()) { _core.ClearSelection(); }
+            TouchCopyMenu().Hide();
+            PaneCopyRequested.raise(*this, cell);
+        }
     }
 
     void TermControl::_TouchHoldingHandler(const IInspectable&, const HoldingRoutedEventArgs& args)
@@ -1990,6 +2039,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         // Reuse word selection without sending a mouse report to the shell.
         const til::point cell{ static_cast<int>(position.X / font.Width), static_cast<int>(position.Y / font.Height) };
+        _paneContextCell = _paneCopyCellAt(position);
         bool selectionNeedsCopy{};
         get_self<ControlCore>(_core)->LeftClickOnTerminal(cell, 2, false, false, false, selectionNeedsCopy);
         _touchSelecting = _core.HasSelection();
@@ -1998,10 +2048,17 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     void TermControl::_TouchCaptureLostHandler(const IInspectable&, const PointerRoutedEventArgs& args)
     {
+        if (_paneContextPointerId == args.Pointer().PointerId())
+        {
+            _paneContextPointerId.reset();
+            _paneContextCell.reset();
+        }
         if (!_IsClosing() && _touchPointerId == args.Pointer().PointerId())
         {
+            if (_touchSelecting && _core.HasSelection()) { _core.ClearSelection(); }
             _touchPointerId.reset();
             _touchSelecting = false;
+            _paneContextCell.reset();
             _interactivity.TouchReleased();
         }
     }
@@ -2031,6 +2088,19 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         const auto ptr = args.Pointer();
         const auto point = args.GetCurrentPoint(*this);
         const auto type = ptr.PointerDeviceType();
+        const auto update = GetPointerUpdateKind(point);
+
+        if (type != Windows::Devices::Input::PointerDeviceType::Touch && update == WM_RBUTTONDOWN &&
+            args.KeyModifiers() == Windows::System::VirtualKeyModifiers::None)
+        {
+            if (const auto cell = _paneCopyCellAt(args.GetCurrentPoint(SwapChainPanel()).Position()))
+            {
+                _paneContextCell = cell;
+                _paneContextPointerId = ptr.PointerId();
+                args.Handled(true);
+                return;
+            }
+        }
 
         // GH#19908: _focused can be true even when the search box has
         // keyboard focus, because GotFocus bubbles from the search box
@@ -2060,9 +2130,14 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else
         {
+            if (update == WM_LBUTTONDOWN && args.KeyModifiers() == Windows::System::VirtualKeyModifiers::None &&
+                get_self<ControlCore>(_core)->IsVtMouseModeEnabled() && _core.HasSelection())
+            {
+                _core.ClearSelection();
+            }
             const auto cursorPosition = point.Position();
             _interactivity.PointerPressed(TermControl::GetPressedMouseButtons(point),
-                                          TermControl::GetPointerUpdateKind(point),
+                                          update,
                                           point.Timestamp(),
                                           ControlKeyStates{ args.KeyModifiers() },
                                           _toTerminalOrigin(cursorPosition));
@@ -2087,6 +2162,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         RestorePointerCursor.raise(*this, nullptr);
 
         const auto ptr = args.Pointer();
+        if (_paneContextPointerId == ptr.PointerId())
+        {
+            args.Handled(true);
+            return;
+        }
         const auto point = args.GetCurrentPoint(*this);
         const auto cursorPosition = point.Position();
         const auto pixelPosition = _toTerminalOrigin(cursorPosition);
@@ -2179,8 +2259,17 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         const auto pixelPosition = _toTerminalOrigin(cursorPosition);
         const auto type = ptr.PointerDeviceType();
 
+        if (_paneContextPointerId == ptr.PointerId() && GetPointerUpdateKind(point) == WM_RBUTTONUP)
+        {
+            _paneContextPointerId.reset();
+            _ReleasePointerCapture(sender, args);
+            args.Handled(true);
+            _showPaneContextMenu(cursorPosition);
+            return;
+        }
+
         const bool releasedTouch = type == Windows::Devices::Input::PointerDeviceType::Touch && _touchPointerId == ptr.PointerId();
-        const bool showCopy = releasedTouch && _touchSelecting && _core.HasSelection();
+        const bool showCopy = releasedTouch && _touchSelecting && (_core.HasSelection() || _paneContextCell);
         if (releasedTouch)
         {
             _touchPointerId.reset();
@@ -2202,11 +2291,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         args.Handled(true);
         if (showCopy)
         {
-            TouchCopyItem().Text(CopyCommandButton().Label());
-            Controls::Primitives::FlyoutShowOptions options;
-            options.Position(cursorPosition);
-            options.Placement(Controls::Primitives::FlyoutPlacementMode::Top);
-            TouchCopyMenu().ShowAt(*this, options);
+            _showPaneContextMenu(cursorPosition);
         }
     }
 
@@ -4196,7 +4281,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                           const IInspectable& /*args*/)
     {
         // formats = nullptr -> copy all formats
-        _interactivity.CopySelectionToClipboard(false, false, _core.Settings().CopyFormatting());
+        if (_interactivity.CopySelectionToClipboard(false, false, _core.Settings().CopyFormatting()))
+        {
+            _core.ClearSelection();
+        }
+        TouchCopyMenu().Hide();
         ContextMenu().Hide();
         SelectionContextMenu().Hide();
     }

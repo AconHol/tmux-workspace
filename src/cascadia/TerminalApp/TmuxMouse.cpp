@@ -134,6 +134,13 @@ namespace winrt::TerminalApp::implementation
         const auto id = control.ContentId();
         if (const auto found = _tmuxMouseHandlers.find(id); found != _tmuxMouseHandlers.end() && found->second.get() == control) { return; }
         _tmuxMouseHandlers.insert_or_assign(id, make_weak(control));
+        control.PaneCopyEnabled(true);
+        control.PaneCopyRequested([weak = get_weak()](const IInspectable& sender, const winrt::Microsoft::Terminal::Core::Point& cell) {
+            if (const auto page = weak.get(); page && page->_tmuxAlive)
+            {
+                if (const auto target = sender.try_as<TermControl>()) { page->_TmuxCopyPaneAt(target, cell.X, cell.Y); }
+            }
+        });
         control.TerminalPointerPressed([weak = get_weak()](const IInspectable& sender, const Input::PointerRoutedEventArgs& args) {
             if (const auto page = weak.get(); page && page->_tmuxAlive)
             {
@@ -224,7 +231,6 @@ namespace winrt::TerminalApp::implementation
         state->clicks.push_back({ column, row, {} });
         state->core.BeginInputBuffering();
         _tmuxMouseFocusRequests.emplace(id, state);
-        _TmuxUpdateTools();
         _TmuxRunMouseFocus(std::move(state));
     }
 
@@ -275,7 +281,6 @@ namespace winrt::TerminalApp::implementation
             TmuxMouseProblem().IsOpen(true);
         }
         _tmuxMouseFocusRequests.erase(state->id);
-        _TmuxUpdateTools();
     }
 
     void TerminalPage::_TmuxCopyMouseInputClicked(const IInspectable&, const RoutedEventArgs&)

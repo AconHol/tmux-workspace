@@ -30,12 +30,19 @@ namespace Microsoft.Terminal.Control
         event Windows.Foundation.TypedEventHandler<Object, Windows.UI.Xaml.Input.PointerRoutedEventArgs> TerminalPointerPressed;
     };
 
+    interface ITerminalPaneCopy
+    {
+        Boolean PaneCopyEnabled;
+        event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Core.Point> PaneCopyRequested;
+    };
+
     [default_interface] runtimeclass TermControl : Windows.UI.Xaml.Controls.UserControl,
                                                    IDirectKeyListener,
                                                    IMouseWheelListener,
                                                    ICoreState,
                                                    Windows.UI.Xaml.Data.INotifyPropertyChanged,
-                                                   ITerminalPointerHost
+                                                   ITerminalPointerHost,
+                                                   ITerminalPaneCopy
     {
         TermControl(ControlInteractivity content);
 

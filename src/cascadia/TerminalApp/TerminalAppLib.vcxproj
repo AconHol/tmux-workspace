@@ -196,7 +196,9 @@
     </ClCompile>
     <ClCompile Include="TmuxServers.cpp" />
     <ClCompile Include="TmuxAi.cpp" />
-    <ClCompile Include="TmuxTools.cpp" />
+    <ClCompile Include="TmuxTools.cpp">
+      <PreprocessorDefinitions Condition="'$(TmuxWorkflowTests)'=='true'">TMUX_WORKFLOW_TESTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="TmuxMouse.cpp" />
     <ClCompile Include="AppCommandlineArgs.cpp" />
     <ClCompile Include="Commandline.cpp" />
@@ -223,6 +225,7 @@
     <ClCompile Include="TerminalPage.cpp">
       <DependentUpon>TerminalPage.xaml</DependentUpon>
       <SubType>Code</SubType>
+      <PreprocessorDefinitions Condition="'$(TmuxWorkflowTests)'=='true'">TMUX_WORKFLOW_TESTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="TabManagement.cpp">
       <DependentUpon>TerminalPage.xaml</DependentUpon>

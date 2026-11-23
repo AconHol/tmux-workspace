@@ -210,6 +210,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         til::typed_event<> HidePointerCursor;
         til::typed_event<> RestorePointerCursor;
         til::typed_event<IInspectable, Windows::UI::Xaml::Input::PointerRoutedEventArgs> TerminalPointerPressed;
+        til::typed_event<IInspectable, Core::Point> PaneCopyRequested;
+        bool PaneCopyEnabled() const noexcept { return _paneCopyEnabled; }
+        void PaneCopyEnabled(bool value) noexcept { _paneCopyEnabled = value; }
         til::typed_event<> ReadOnlyChanged;
         til::typed_event<IInspectable, IInspectable> FocusFollowMouseRequested;
         til::typed_event<Control::TermControl, Windows::UI::Xaml::RoutedEventArgs> Initialized;
@@ -312,6 +315,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         bool _pointerPressedInBounds{ false };
         std::optional<uint32_t> _touchPointerId;
         bool _touchSelecting{ false };
+        bool _paneCopyEnabled{ false };
+        std::optional<uint32_t> _paneContextPointerId;
+        std::optional<Core::Point> _paneContextCell;
 
         winrt::Windows::UI::Composition::ScalarKeyFrameAnimation _bellLightAnimation{ nullptr };
         winrt::Windows::UI::Composition::ScalarKeyFrameAnimation _bellDarkAnimation{ nullptr };
@@ -369,6 +375,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void _TappedHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::TappedRoutedEventArgs& e);
         void _TouchHoldingHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::HoldingRoutedEventArgs& e);
         void _TouchCaptureLostHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& e);
+        std::optional<Core::Point> _paneCopyCellAt(Windows::Foundation::Point position);
+        void _showPaneContextMenu(Windows::Foundation::Point position);
+        void _PaneContextClosed(const IInspectable&, const IInspectable&);
+        void _PaneCopyCommandHandler(const IInspectable&, const Windows::UI::Xaml::RoutedEventArgs&);
         void _KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
         void _KeyUpHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
         void _CharacterHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::CharacterReceivedRoutedEventArgs& e);

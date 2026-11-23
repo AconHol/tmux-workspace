@@ -228,19 +228,12 @@ namespace TmuxWorkspace
                " mouse " + (mode == MouseMode::Native ? "on" : "off");
     }
 
-    inline std::string captureActivePaneCommand(const Session& session)
-    {
-        // The trailing colon targets this session's current window and its
-        // active pane even when a different session is attached elsewhere.
-        return sessionGuard(session) + "exec tmux capture-pane -p -S -500 -t " + quoteShell(session.id + ":");
-    }
-
     inline std::string attachCommand(const Session& session, MouseMode mode = MouseMode::Native)
     {
         return mouseCommand(session, mode) + " || exit $?; exec tmux attach-session -t " + quoteShell("=" + session.id);
     }
 
-    inline std::string focusPaneCommand(const Session& session, int column, int row)
+    inline std::string paneAtCommand(const Session& session, int column, int row, std::string_view onHit)
     {
         if (column < 0 || row < 0 || column > 32766 || row > 32766) { throw std::invalid_argument("Invalid terminal cell"); }
         const auto target = quoteShell(session.id);
@@ -256,7 +249,17 @@ namespace TmuxWorkspace
             "[ \"$active\" = 1 ] && [ \"$x\" -lt \"$ww\" ] && [ \"$y\" -lt \"$wh\" ] || continue; "
             "else [ \"$x\" -ge \"$left\" ] && [ \"$x\" -lt $((left+width)) ] && "
             "[ \"$y\" -ge \"$top\" ] && [ \"$y\" -lt $((top+height)) ] || continue; fi; "
-            "tmux select-pane -t \"$pane\" && printf '%s\\n' \"$pane\"; exit $?; done; exit 2; }";
+            + std::string{ onHit } + "; exit $?; done; exit 2; }";
+    }
+
+    inline std::string focusPaneCommand(const Session& session, int column, int row)
+    {
+        return paneAtCommand(session, column, row, "tmux select-pane -t \"$pane\" && printf '%s\\n' \"$pane\"");
+    }
+
+    inline std::string capturePaneAtCommand(const Session& session, int column, int row)
+    {
+        return paneAtCommand(session, column, row, "tmux capture-pane -p -S -500 -t \"$pane\"");
     }
 
     inline bool isEmptyServerError(std::string_view error)

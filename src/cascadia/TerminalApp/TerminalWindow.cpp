@@ -324,8 +324,7 @@ namespace winrt::TerminalApp::implementation
     winrt::Windows::Foundation::IAsyncOperation<ContentDialogResult> TerminalWindow::ShowDialog(winrt::WUX::Controls::ContentDialog dialog)
     {
         if (dialog && (dialog.Name() == L"TmuxNewSessionDialog" || dialog.Name() == L"TmuxAddServerDialog" ||
-                       dialog.Name() == L"TmuxPersonalizationDialog" || dialog.Name() == L"TmuxTranslationDialog" ||
-                       dialog.Name() == L"TmuxPaneCopyDialog"))
+                       dialog.Name() == L"TmuxPersonalizationDialog" || dialog.Name() == L"TmuxTranslationDialog"))
         {
             // UWP ContentDialog text input is unsupported in XAML Islands.
             // Keep editable workspace forms in the existing island instead.

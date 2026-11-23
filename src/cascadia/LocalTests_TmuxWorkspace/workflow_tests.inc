@@ -342,8 +342,7 @@ namespace TerminalAppLocalTests
         }
 
         static winrt::Windows::Foundation::IAsyncAction TouchGesture(winrt::com_ptr<Page> page, int column, int row, bool swipe = false,
-                                                                   std::optional<int> holdToColumn = std::nullopt,
-                                                                   winrt::Windows::UI::Xaml::FrameworkElement surface = nullptr)
+                                                                   std::optional<int> holdToColumn = std::nullopt)
         {
             using namespace winrt;
             const auto control = page->_GetActiveControl();
@@ -352,9 +351,7 @@ namespace TerminalAppLocalTests
             const auto core = get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core();
             const auto font = core.FontSizeInDips();
             const auto hwnd = *page->_hostingHwnd;
-            const auto origin = surface ?
-                surface.TransformToVisual(nullptr).TransformPoint({ static_cast<float>(surface.ActualWidth() / 2), static_cast<float>(surface.ActualHeight() / 2) }) :
-                panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
+            const auto origin = panel.TransformToVisual(nullptr).TransformPoint({ (column + 0.5f) * font.Width, (row + 0.5f) * font.Height });
             const auto scale = GetDpiForWindow(hwnd) / 96.0f;
             POINT location{ static_cast<LONG>(std::lround(origin.X * scale)), static_cast<LONG>(std::lround(origin.Y * scale)) };
             check_bool(ClientToScreen(hwnd, &location));
@@ -410,6 +407,26 @@ namespace TerminalAppLocalTests
             co_await WaitMouseFocus(page);
         }
 
+        static void InvokeTerminalMenuItem(const winrt::Microsoft::Terminal::Control::TermControl& control, std::wstring_view name)
+        {
+            using namespace winrt;
+            using namespace winrt::Windows::UI::Xaml;
+            using namespace Automation::Peers;
+            for (const auto& popup : Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(control.XamlRoot()))
+            {
+                if (const auto child = popup.Child())
+                {
+                    if (const auto item = FindVisual(child, name))
+                    {
+                        const auto peer = FrameworkElementAutomationPeer::CreatePeerForElement(item);
+                        peer.GetPattern(PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+                        return;
+                    }
+                }
+            }
+            throw hresult_error(E_FAIL, hstring{ L"Missing terminal context action: " + std::wstring{ name } });
+        }
+
         static winrt::Windows::Foundation::IAsyncAction ProbeTouchCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, std::string pane, int left, int top)
         {
             using namespace winrt;
@@ -423,86 +440,52 @@ namespace TerminalAppLocalTests
             const auto copyEvent = control.WriteToClipboard(auto_revoke, [&](const auto&, const auto& args) { copied = args.Plain(); });
             co_await TouchGesture(page, left + 1, top + 1, false, left + 10);
             if (!control.HasSelection()) { throw hresult_error(E_FAIL, L"Touch hold and drag did not select text"); }
-            FrameworkElement item{ nullptr };
-            for (const auto& popup : Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(control.XamlRoot()))
-            {
-                if (const auto child = popup.Child())
-                {
-                    item = FindVisual(child, L"TouchCopyItem");
-                    if (item) { break; }
-                }
-            }
-            if (!item) { throw hresult_error(E_FAIL, L"Touch selection did not present the Copy command"); }
-            using namespace Automation::Peers;
-            const auto peer = FrameworkElementAutomationPeer::CreatePeerForElement(item);
-            peer.GetPattern(PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            InvokeTerminalMenuItem(control, L"TouchCopyItem");
             co_await pause(page->Dispatcher());
             if (copied != L"tapcopy second") { throw hresult_error(E_FAIL, hstring{ L"Touch Copy returned unexpected text: " + std::wstring{ copied } }); }
             if (!to_string(co_await MouseRemote(server, "tmux display-message -p -t " + target + " '#{pane_active}'")).starts_with("1"))
             {
                 throw hresult_error(E_FAIL, L"Touch copy changed the active pane");
             }
-            get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager)->TryLookupCore(control.ContentId()).Core().ClearSelection();
+            if (control.HasSelection()) { throw hresult_error(E_FAIL, L"Copy left a stale text highlight"); }
         }
 
-        static winrt::Windows::Foundation::IAsyncAction ProbePaneCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server, std::string active, std::string other)
+        static winrt::Windows::Foundation::IAsyncAction ProbePaneCopy(winrt::com_ptr<Page> page, ::TmuxWorkspace::Server server,
+                                                                     ::TmuxWorkspace::Session session, std::string pane, std::string other,
+                                                                     int column, int row)
         {
             using namespace winrt;
-            using namespace winrt::Windows::UI::Xaml;
-            const auto send = [](const std::string& pane, const std::string& command) {
-                const auto target = ::TmuxWorkspace::quoteShell(pane);
+            const auto control = page->_GetActiveControl();
+            const auto send = [](const std::string& paneId, const std::string& command) {
+                const auto target = ::TmuxWorkspace::quoteShell(paneId);
                 return "tmux send-keys -t " + target + " C-u; tmux send-keys -t " + target + " -l -- " +
                     ::TmuxWorkspace::quoteShell(command) + "; tmux send-keys -t " + target + " Enter";
             };
-            co_await MouseRemote(server, send(active, "printf '\\103OPY_PANE_A1\\n\\n\\103OPY_PANE_A2\\n'") +
-                                        "; " + send(other, "printf '\\103OPY_PANE_B\\n'"));
+            co_await MouseRemote(server, send(pane, "printf '\\103OPY_DIRECT_PANE_B\\n'") + "; " +
+                                        send(other, "printf '\\103OPY_DIRECT_PANE_A\\n'"));
             co_await pause(page->Dispatcher());
-            const auto otherText = co_await MouseRemote(server, "tmux capture-pane -p -t " + ::TmuxWorkspace::quoteShell(other));
-            if (std::wstring_view{ otherText }.find(L"COPY_PANE_B") == std::wstring_view::npos)
+            const auto expected = co_await MouseRemote(server, ::TmuxWorkspace::capturePaneAtCommand(session, column, row));
+            if (std::wstring_view{ expected }.find(L"COPY_DIRECT_PANE_B") == std::wstring_view::npos)
             {
-                throw hresult_error(E_FAIL, L"Missing text in the other split pane");
+                throw hresult_error(E_FAIL, L"Remote capture did not find the fixture marker before opening the menu");
             }
-
-            const auto previous = page->DialogPresenter();
-            auto restore = wil::scope_exit([&]() noexcept {
-                if (page->_tmuxDismissInput) { page->_tmuxDismissInput(); }
-                page->DialogPresenter(previous);
-            });
-            auto dialog = make_self<WorkflowLiveDialog>();
-            dialog->page = page;
-            dialog->opened = [](auto) {};
-            page->DialogPresenter(dialog.as<winrt::TerminalApp::IDialogPresenter>());
-            const auto button = page->TmuxWorkspaceView().IsPaneOpen() ? page->TmuxCopyPaneButton() : page->TmuxRailCopyPane();
-            co_await TouchGesture(page, 0, 0, false, std::nullopt, button);
-            for (int i = 0; !page->TmuxPaneCopyDialog().IsPrimaryButtonEnabled() && i < 40; ++i) { co_await pause(page->Dispatcher()); }
-            const auto all = page->_TmuxPaneCopyText();
-            const std::wstring_view allText{ all };
-            if (page->TmuxInputLayer().Visibility() != Visibility::Visible ||
-                allText.find(L"COPY_PANE_A1\r\n\r\nCOPY_PANE_A2") == std::wstring_view::npos ||
-                allText.find(L"COPY_PANE_B") != std::wstring_view::npos)
+            page->TmuxStatus().Text(L"");
+            co_await TouchGesture(page, column, row, false, column);
+            InvokeTerminalMenuItem(control, L"CopyPaneContextItem");
+            for (int i = 0; page->TmuxStatus().Text().empty() && i < 40; ++i) { co_await pause(page->Dispatcher()); }
+            const auto result = page->TmuxStatus().Text();
+            if (std::wstring_view{ result }.find(L"COPY_DIRECT_PANE_B") == std::wstring_view::npos)
             {
-                throw hresult_error(E_FAIL, L"The preview did not isolate the active pane's output");
+                const auto detail = result.size() < 120 ? std::wstring{ result } : std::wstring{ result }.substr(0, 120);
+                throw hresult_error(E_FAIL, hstring{ L"Direct pane copy returned unexpected text: " + detail });
             }
-            const auto list = page->TmuxPaneCopyList();
-            for (const auto expected : { L"COPY_PANE_A1", L"COPY_PANE_A2" })
+            if (std::wstring_view{ result }.find(L"COPY_DIRECT_PANE_A") != std::wstring_view::npos || control.HasSelection())
             {
-                const auto& lines = page->_tmuxPaneCopyLines;
-                const auto match = std::find(lines.begin(), lines.end(), expected);
-                if (match == lines.end()) { throw hresult_error(E_FAIL, L"Copy test line is missing"); }
-                const auto item = list.Items().GetAt(static_cast<uint32_t>(match - lines.begin())).as<FrameworkElement>();
-                list.ScrollIntoView(item);
-                co_await pause(page->Dispatcher());
-                co_await TouchGesture(page, 0, 0, false, std::nullopt, item);
+                throw hresult_error(E_FAIL, L"Direct pane copy mixed panes or left a highlight");
             }
-            if (page->_TmuxPaneCopyText() != L"COPY_PANE_A1\r\n\r\nCOPY_PANE_A2" ||
-                page->TmuxPaneCopyDialog().PrimaryButtonText() != L"复制选中行")
+            if (!to_string(co_await MouseRemote(server, "tmux display-message -p -t " + ::TmuxWorkspace::quoteShell(other) + " '#{pane_active}'")).starts_with("1"))
             {
-                throw hresult_error(E_FAIL, L"Two touch taps did not select exactly the requested lines");
-            }
-            co_await TouchGesture(page, 0, 0, false, std::nullopt, page->TmuxInputPrimary());
-            if (page->_tmuxDialogOpen || page->TmuxStatus().Text() != L"已复制当前窗格的文字")
-            {
-                throw hresult_error(E_FAIL, L"The pane copy button did not commit the selected text");
+                throw hresult_error(E_FAIL, L"Copying an inactive pane changed tmux focus");
             }
         }
 
@@ -546,13 +529,30 @@ namespace TerminalAppLocalTests
             native.PointerReleased(static_cast<MouseButtonState>(0), WM_LBUTTONUP, {}, point);
             co_await pause(page->Dispatcher());
             require(to_string(co_await MouseRemote(server, active)).starts_with(b.id + "\n"), "Native pointer pipeline did not select the clicked tmux pane");
+            // A normal wheel report must reach tmux at the pointed cell.
+            // Populate history so the default WheelUpPane action can scroll.
+            const auto paneTarget = ::TmuxWorkspace::quoteShell(b.id);
+            co_await MouseRemote(server, "tmux send-keys -t " + paneTarget + " -l -- 'seq 1 100'; tmux send-keys -t " + paneTarget + " Enter");
+            co_await pause(page->Dispatcher());
+            native.MouseWheel({}, { 0, WHEEL_DELTA }, point, static_cast<MouseButtonState>(0));
+            co_await pause(page->Dispatcher());
+            if (!to_string(co_await MouseRemote(server, "tmux display-message -p -t " + paneTarget + " '#{pane_in_mode}'")).starts_with("1"))
+            {
+                throw hresult_error(E_FAIL, L"Native wheel did not reach the pointed tmux pane");
+            }
+            co_await MouseRemote(server, "tmux send-keys -X -t " + paneTarget + " cancel");
             if (testTouch)
             {
                 co_await TouchGesture(page, column(a), row(a));
                 if (!to_string(co_await MouseRemote(server, active)).starts_with(a.id + "\n"))
                 { throw hresult_error(E_FAIL, L"Touch tap did not focus the pane in native mode"); }
+                const auto clipboardSequence = GetClipboardSequenceNumber();
                 co_await ProbeTouchCopy(page, server, a.id, a.left, a.top);
-                co_await ProbePaneCopy(page, server, a.id, b.id);
+                co_await ProbePaneCopy(page, server, session, b.id, a.id, column(b), row(b));
+                if (GetClipboardSequenceNumber() != clipboardSequence)
+                {
+                    throw hresult_error(E_FAIL, L"Clipboard changed during the isolated touch copy tests");
+                }
             }
 
             co_await SetMouseMode(page, Mode::Compatibility);
@@ -785,7 +785,8 @@ namespace TerminalAppLocalTests
                 }
                 // Send a marker only to the shell in the test-owned session,
                 // through SSH/tmux. Never send input to an existing user pane.
-                const auto markerCommand = "tmux send-keys -t " + ::TmuxWorkspace::quoteShell(ownedSession->id) +
+                const auto markerTarget = ::TmuxWorkspace::quoteShell(ownedSession->id);
+                const auto markerCommand = "tmux send-keys -t " + markerTarget + " C-u; tmux send-keys -t " + markerTarget +
                     " -l " + ::TmuxWorkspace::quoteShell("printf '\\103\\117\\104\\105\\130_WORKFLOW_OK\\n'") +
                     "; tmux send-keys -t " + ::TmuxWorkspace::quoteShell(ownedSession->id) + " Enter";
                 co_await resume_background();
@@ -871,11 +872,12 @@ namespace TerminalAppLocalTests
                 {
                     note("TOUCH: Windows touch gestures passed in Native, Compatibility and Off; swiping did not switch pane");
                     note("COPY: long press and drag selected terminal output; the visible Copy action produced the exact text");
-                    note("PANE COPY: two touch taps selected the requested rows; the other split pane was excluded");
+                    note("PANE COPY: terminal long press copied the pointed inactive pane and cleared selection highlighting");
                 }
                 co_await MouseRemote(*server, restorePane);
                 for (unsigned i = 0; i < 5; ++i) { co_await pause(dispatcher); }
                 note("MOUSE: native pointer focus, compatibility with mouse off, rapid-click input routing, top status bars, zoom, failure recovery, saved settings and reconnect passed");
+                note("WHEEL: native VT scroll reached the pointed tmux pane");
 
                 dialogs->prepare = [&](ContentDialog dialog) {
                     require(dialog == page->TmuxPersonalizationDialog(), "Unexpected personalization dialog");

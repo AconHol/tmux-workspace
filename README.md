@@ -17,7 +17,7 @@ Choose a server, then open its tmux sessions from a permanent, collapsible sideb
 - Sidebar shortcuts control real tmux splits, pane focus, zoom, windows, layouts and history, including from the compact rail.
 - Choose Native, Compatibility or Off under Personalization → Pane Mouse and Touch. Native mode supports tmux mouse clicks, resizing and scrolling. Compatibility mode selects clicked panes over SSH with tmux mouse off. Both modes support touchscreen taps to focus a pane and keep the terminal's swipe gesture for scrolling. The preference is saved locally and applies to existing and reconnected sessions.
 - On a touchscreen, hold a word to select it, drag to extend the selection, and tap Copy after lifting your finger.
-- Use **Copy current pane** in the sidebar to open a snapshot of just the focused tmux pane. Copy the whole snapshot or tap the first and last lines of a range. The snapshot includes the visible output and up to 500 prior lines.
+- Right-click or touch and hold inside a tmux pane, then choose **Copy this pane**. This copies the pane under the pointer, including the visible screen and up to 500 prior lines. Closing the menu clears the text highlight. In Native mouse mode, the terminal forwards wheel input to tmux and other programs that request mouse reporting.
 - Translate your own text with a configurable OpenAI-compatible API and insert it into the original terminal. Choose the target language, endpoint and model; the API key is encrypted with Windows DPAPI. Press Enter yourself to submit the inserted text.
 - If tmux is missing, the app offers an explicit install action in an interactive SSH terminal.
 - No fixed five-second polling. Refresh manually or after relevant workspace operations.
